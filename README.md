@@ -217,14 +217,17 @@ When DeepSeek Harness boots with `dsh-graphify`, **you do not need to manually s
 If you wish to test the Graphify MCP server independently, inspect JSON-RPC communication directly, or connect it to another MCP client (such as Claude Desktop, Cursor, or Antigravity IDE), you can start it manually with:
 
 ```sh
-# Recommended: Run via uv (automatically resolves dependencies)
-uv run --with graphifyy --with mcp -m graphify.serve graphify-out/graph.json
+# Recommended: Run via uv in your project root (auto-detects ./graphify-out/graph.json)
+uv run --with graphifyy --with mcp -m graphify.serve
+
+# Explicit path (when running from a different directory):
+uv run --with graphifyy --with mcp -m graphify.serve /path/to/graphify-out/graph.json
 
 # Alternative: Run with python3
-python3 -m graphify.serve graphify-out/graph.json
+python3 -m graphify.serve
 
 # Alternative: Run via the graphify CLI
-graphify serve --graph graphify-out/graph.json
+graphify serve
 ```
 
 ---
