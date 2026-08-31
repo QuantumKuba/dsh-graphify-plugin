@@ -1,0 +1,7 @@
+- insert:
+    - id: graphify
+      name: dsh-graphify
+      config:
+        autoDetect: true
+        enablePromptSection: true
+        timeoutMs: 60000

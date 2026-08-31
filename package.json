@@ -1,0 +1,74 @@
+{
+  "name": "dsh-graphify",
+  "version": "0.1.0",
+  "description": "Native Graphify knowledge graph plugin for DeepSeek Harness (DSH)",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "graphify",
+    "knowledge-graph",
+    "code-intelligence",
+    "mcp",
+    "agent-tools"
+  ],
+  "license": "MIT",
+  "author": "DeepSeek",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/graphify-plugin-dse.git"
+  },
+  "bugs": {
+    "url": "https://github.com/deepseek-ai/graphify-plugin-dse/issues"
+  },
+  "homepage": "https://github.com/deepseek-ai/graphify-plugin-dse#readme",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf lib",
+    "build": "tsc",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run clean && pnpm run build && pnpm test"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
