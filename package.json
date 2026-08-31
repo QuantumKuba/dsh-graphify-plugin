@@ -51,7 +51,7 @@
   "scripts": {
     "clean": "rm -rf lib",
     "build": "tsc",
-    "test": "node --import tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm run clean && pnpm run build && pnpm test"
   },
