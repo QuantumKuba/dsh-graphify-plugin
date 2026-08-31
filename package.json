@@ -15,15 +15,15 @@
     "agent-tools"
   ],
   "license": "MIT",
-  "author": "DeepSeek",
+  "author": "QuantumKuba",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deepseek-ai/graphify-plugin-dse.git"
+    "url": "git+https://github.com/QuantumKuba/dsh-graphify-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/deepseek-ai/graphify-plugin-dse/issues"
+    "url": "https://github.com/QuantumKuba/dsh-graphify-plugin/issues"
   },
-  "homepage": "https://github.com/deepseek-ai/graphify-plugin-dse#readme",
+  "homepage": "https://github.com/QuantumKuba/dsh-graphify-plugin#readme",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

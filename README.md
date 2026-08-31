@@ -1,6 +1,6 @@
 # dsh-graphify
 
-[![CI Status](https://github.com/deepseek-ai/graphify-plugin-dse/actions/workflows/ci.yml/badge.svg)](https://github.com/deepseek-ai/graphify-plugin-dse/actions/workflows/ci.yml)
+[![CI Status](https://github.com/QuantumKuba/dsh-graphify-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/QuantumKuba/dsh-graphify-plugin/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/dsh-graphify.svg)](https://www.npmjs.com/package/dsh-graphify)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org)

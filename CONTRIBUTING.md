@@ -17,8 +17,8 @@ Thank you for your interest in contributing to `@deepseek-ai/dsh-graphify`! This
 Clone the repository and install dependencies:
 
 ```sh
-git clone https://github.com/deepseek-ai/graphify-plugin-dse.git
-cd graphify-plugin-dse
+git clone https://github.com/QuantumKuba/dsh-graphify-plugin.git
+cd dsh-graphify-plugin
 pnpm install
 ```
 
