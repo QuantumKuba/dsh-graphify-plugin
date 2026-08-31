@@ -3,8 +3,12 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { detectGraph } from '../src/detector.ts'
 import { Config } from '../src/config.ts'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
 
 describe('detector & config', () => {
   it('validates default config schema', () => {
@@ -18,8 +22,8 @@ describe('detector & config', () => {
   })
 
   it('detects graph in current workspace directory', () => {
-    const detected = detectGraph(process.cwd())
-    assert.ok(detected, 'Should detect graph in current workspace')
+    const detected = detectGraph(fixtureDir)
+    assert.ok(detected, 'Should detect graph in fixture workspace')
     assert.equal(detected.hasGraph, true)
     assert.ok(detected.graphJsonPath.endsWith('graph.json'))
     assert.ok(detected.graphDir.endsWith('graphify-out'))
@@ -27,11 +31,11 @@ describe('detector & config', () => {
   })
 
   it('detects graph from nested subdirectory', () => {
-    const nestedDir = path.join(process.cwd(), 'docs', 'subsystems')
+    const nestedDir = path.join(fixtureDir, 'docs', 'subsystems')
     const detected = detectGraph(nestedDir)
     assert.ok(detected, 'Should detect graph from nested directory')
     assert.equal(detected.hasGraph, true)
-    assert.equal(detected.projectRoot, process.cwd())
+    assert.equal(detected.projectRoot, fixtureDir)
   })
 
   it('returns null when no graph exists in empty directory', () => {
@@ -45,9 +49,10 @@ describe('detector & config', () => {
   })
 
   it('detects graph via explicit customGraphPath', () => {
-    const explicitPath = path.join(process.cwd(), 'graphify-out', 'graph.json')
+    const explicitPath = path.join(fixtureDir, 'graphify-out', 'graph.json')
     const detected = detectGraph(os.tmpdir(), explicitPath)
     assert.ok(detected)
     assert.equal(detected.graphJsonPath, explicitPath)
   })
 })
+

@@ -46,4 +46,4 @@ coverage/
 tmp/
 temp/
 
-graphify-out/
+/graphify-out/

@@ -1,9 +1,14 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 // Test loading from built lib distribution
 import * as GraphifyBuiltPlugin from '../lib/index.js'
 import type { ToolDefinition, PromptSection } from '../lib/types/types.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
 
 describe('Built Library Distribution', () => {
   it('loads built plugin and executes tools successfully', async () => {
@@ -28,6 +33,7 @@ describe('Built Library Distribution', () => {
     }
 
     const fiber = await ctx.plugin(GraphifyBuiltPlugin, {
+      cwd: fixtureDir,
       autoDetect: true,
       enablePromptSection: true,
     })

@@ -1,9 +1,14 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import * as GraphifyPlugin from '../src/index.ts'
 import type { ToolDefinition, PromptSection } from '../src/types.ts'
 import type { CommandDefinition } from '../src/commands.ts'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
 
 describe('Graphify Plugin Integration', () => {
   it('mounts plugin, registers all tools, prompt section, and slash command', async () => {
@@ -45,6 +50,7 @@ describe('Graphify Plugin Integration', () => {
 
     // Mount Graphify plugin and await fiber activation
     const fiber = await ctx.plugin(GraphifyPlugin, {
+      cwd: fixtureDir,
       autoDetect: true,
       enablePromptSection: true,
     })
@@ -177,6 +183,7 @@ describe('Graphify Plugin Integration', () => {
     }
 
     const fiber = await ctx.plugin(GraphifyPlugin, {
+      cwd: fixtureDir,
       toolPrefix: 'kg_',
       enablePromptSection: false,
     })

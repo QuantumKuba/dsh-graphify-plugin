@@ -1,14 +1,18 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { GraphifyMcpClient } from '../src/client.ts'
 import { resolveGraphifyCommand } from '../src/server-process.ts'
 import { Config } from '../src/config.ts'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
+
 describe('GraphifyMcpClient', () => {
-  const config = Config({})
-  const graphPath = path.join(process.cwd(), 'graphify-out', 'graph.json')
-  const { command, args } = resolveGraphifyCommand(config, graphPath, process.cwd())
+  const config = Config({ cwd: fixtureDir })
+  const graphPath = path.join(fixtureDir, 'graphify-out', 'graph.json')
+  const { command, args } = resolveGraphifyCommand(config, graphPath, fixtureDir)
 
   it('resolves correct command and arguments', () => {
     assert.ok(command)
@@ -19,7 +23,7 @@ describe('GraphifyMcpClient', () => {
     const client = new GraphifyMcpClient({
       command,
       args,
-      cwd: process.cwd(),
+      cwd: fixtureDir,
       timeoutMs: 30000,
     })
 
@@ -36,7 +40,7 @@ describe('GraphifyMcpClient', () => {
 
       // Call graph_stats tool
       const result = await client.callTool('graph_stats', {
-        project_path: process.cwd(),
+        project_path: fixtureDir,
       })
 
       assert.equal(result.isError, false)
@@ -53,14 +57,14 @@ describe('GraphifyMcpClient', () => {
     const client = new GraphifyMcpClient({
       command,
       args,
-      cwd: process.cwd(),
+      cwd: fixtureDir,
       timeoutMs: 30000,
     })
 
     try {
       const result = await client.callTool('query_graph', {
         question: 'Cordis plugins',
-        project_path: process.cwd(),
+        project_path: fixtureDir,
         token_budget: 1000,
       })
 
@@ -77,7 +81,7 @@ describe('GraphifyMcpClient', () => {
     const client = new GraphifyMcpClient({
       command,
       args,
-      cwd: process.cwd(),
+      cwd: fixtureDir,
       timeoutMs: 30000,
     })
 
@@ -96,3 +100,4 @@ describe('GraphifyMcpClient', () => {
     }
   })
 })
+
