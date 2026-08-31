@@ -105,7 +105,7 @@ This generates a `graphify-out/` folder containing:
 - `graphify-out/GRAPH_REPORT.md` — Architectural overview and god nodes report.
 - `graphify-out/graph.html` — Interactive visual graph explorer.
 
-*(Note: If you don't generate the graph beforehand, the agent can also trigger indexing via the `/graphify` slash command).*
+*(Note: You do not need to manually start the MCP server. Once `graphify-out/graph.json` exists, DeepSeek Harness automatically launches and connects to the background Graphify MCP server over stdio).*
 
 ---
 
@@ -204,13 +204,28 @@ When detected, the plugin automatically configures the working directory and inj
 
 ---
 
-### 3. Subprocess Lifecycle & Process Quiescence
+### 3. Subprocess Lifecycle & Standalone MCP Server
 
-The plugin manages the Graphify MCP server child process over `stdio`:
+#### Automatic Lifecycle (Default)
+When DeepSeek Harness boots with `dsh-graphify`, **you do not need to manually start or maintain a separate MCP server process**. The plugin automatically spawns and supervises the server child process over `stdio`:
 - **Executable Resolution**: Auto-detects `uv`, virtual environments, or system `python3`.
 - **Environment Scrubbing**: Redacts sensitive API keys and tokens from the child environment.
 - **Cooperative Cancellation**: Connects DSH `AbortSignal` tokens to MCP `notifications/cancelled`.
-- **Graceful Quiescence**: Shuts down cleanly via `SIGTERM` with an automated `SIGKILL` timeout fallback.
+- **Graceful Quiescence**: Shuts down cleanly via `SIGTERM` with an automated `SIGKILL` timeout fallback on plugin disposal.
+
+#### Running the MCP Server Standalone (Manual / Debugging)
+If you wish to test the Graphify MCP server independently, inspect JSON-RPC communication directly, or connect it to another MCP client (such as Claude Desktop, Cursor, or Antigravity IDE), you can start it manually with:
+
+```sh
+# Recommended: Run via uv (automatically resolves dependencies)
+uv run --with graphifyy --with mcp -m graphify.serve graphify-out/graph.json
+
+# Alternative: Run with python3
+python3 -m graphify.serve graphify-out/graph.json
+
+# Alternative: Run via the graphify CLI
+graphify serve --graph graphify-out/graph.json
+```
 
 ---
 
