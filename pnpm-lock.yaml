@@ -47,13 +47,16 @@ importers:
         version: 18.3.1
       tsdown:
         specifier: ^0.22.14
-        version: 0.22.14(tsx@4.23.12)(typescript@5.9.3)
+        version: 0.22.14(tsx@4.23.12)(typescript@5.9.3)(unrun@0.3.1)
       tsx:
         specifier: ^4.19.2
         version: 4.23.12
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
+      unrun:
+        specifier: ^0.3.1
+        version: 0.3.1
 
 packages:
 
@@ -1665,6 +1668,16 @@ packages:
 
   unist-util-visit@5.1.0:
     resolution: {integrity: sha512-m+vIdyeCOpdr/QeQCu2EzxX/ohgS8KbnPDgFni4dQsfSCtpz8UqDyY5GjRru8PDKuYn7Fq19j1CQ+nJSsGKOzg==}
+
+  unrun@0.3.1:
+    resolution: {integrity: sha512-onIck/oNnCaytwths1ZVp1LK2Gq2hPoyFhiHebObuUXqR3S0uHuLLaBK8K6mRRgV7Ptip8AnNvaUsgzwWwBZuA==}
+    engines: {node: ^22.13.0 || >=24.0.0}
+    hasBin: true
+    peerDependencies:
+      synckit: ^0.11.11
+    peerDependenciesMeta:
+      synckit:
+        optional: true
 
   use-sync-external-store@1.2.0:
     resolution: {integrity: sha512-eEgnFxGQ1Ife9bzYs6VLi8/4X6CObHMw9Qr9tPY43iKwsPw8xE8+EFsf/2cFZ5S3esXgpWgtSCtLNS41F+sKPA==}
@@ -3317,7 +3330,7 @@ snapshots:
 
   trim-lines@3.0.1: {}
 
-  tsdown@0.22.14(tsx@4.23.12)(typescript@5.9.3):
+  tsdown@0.22.14(tsx@4.23.12)(typescript@5.9.3)(unrun@0.3.1):
     dependencies:
       ansis: 4.3.1
       cac: 7.0.0
@@ -3337,6 +3350,7 @@ snapshots:
     optionalDependencies:
       tsx: 4.23.12
       typescript: 5.9.3
+      unrun: 0.3.1
     transitivePeerDependencies:
       - '@typescript/native-preview'
       - '@volar/typescript'
@@ -3385,6 +3399,10 @@ snapshots:
       '@types/unist': 3.0.3
       unist-util-is: 6.0.1
       unist-util-visit-parents: 6.0.2
+
+  unrun@0.3.1:
+    dependencies:
+      rolldown: 1.2.6
 
   use-sync-external-store@1.2.0(react@18.3.1):
     dependencies:
