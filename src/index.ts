@@ -7,7 +7,7 @@ import { registerGraphifyTools } from './tools.ts'
 import { registerGraphifyPrompt } from './prompt.ts'
 import { registerGraphifyCommand } from './commands.ts'
 
-export const name = 'graphify'
+export const name = 'dsh-graphify'
 export const inject = ['tools', 'systemPrompt']
 export { Config } from './config.ts'
 export * from './types.ts'

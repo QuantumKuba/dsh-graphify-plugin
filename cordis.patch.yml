@@ -1,5 +1,5 @@
 - insert:
-    - id: graphify
+    - id: dsh-graphify
       name: dsh-graphify
       config:
         autoDetect: true

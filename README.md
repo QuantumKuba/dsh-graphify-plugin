@@ -23,7 +23,7 @@ Add the bundle to a DSH patch:
 
 ```yaml
 - insert:
-    - id: graphify
+    - id: dsh-graphify
       name: dsh-graphify
       config:
         cwd: /absolute/path/to/project
@@ -34,6 +34,8 @@ Add the bundle to a DSH patch:
 ## Commands and tools
 
 The direct human command is available only in interactive DSH adapters that compose `ctx.commands`. A headless `dsh` invocation treats `/graphify` as model input; use normal Graphify CLI commands when running headless.
+
+In DSH Web, the package's browser companion renders the submitted `/graphify` line and DSH's durable result card. Both successful output and failures remain visible after reload because they are reconstructed from `command/run` and `command/done` session events.
 
 ```text
 /graphify                         build the receiving session’s project
@@ -56,6 +58,8 @@ It also exposes three compatibility tools:
 - `graphify_resource` reads Graphify resources such as `graphify://report`, graph statistics, confidence audit, and suggested questions.
 
 Every native tool supplies `project_path` automatically from the calling agent’s session cwd. An explicit `project_path` always wins.
+
+You do not need to start `python -m graphify.serve` separately. The plugin starts and owns an MCP subprocess when an agent first calls a Graphify tool. The `/graphify` command is independent of that MCP subprocess and invokes the Graphify CLI directly.
 
 ## Runtime configuration
 
