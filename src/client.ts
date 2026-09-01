@@ -1,5 +1,5 @@
 import { GraphifyServerProcess } from './server-process.ts'
-import type { McpToolInfo, McpCallResult, JsonRpcResponse } from './types.ts'
+import type { McpToolInfo, McpResource, McpCallResult, McpResourceResult, JsonRpcResponse } from './types.ts'
 
 export interface ClientOptions {
   command: string
@@ -23,6 +23,10 @@ export class GraphifyMcpClient {
       options.cwd,
       options.timeoutMs ?? 60000
     )
+    this.process.onExit(() => {
+      this.isInitialized = false
+      this.initPromise = null
+    })
   }
 
   /**
@@ -32,7 +36,7 @@ export class GraphifyMcpClient {
     if (this.isInitialized) return
     if (this.initPromise) return this.initPromise
 
-    this.initPromise = (async () => {
+    const initialization = (async () => {
       this.process.start()
 
       const { promise } = this.process.send('initialize', {
@@ -52,8 +56,18 @@ export class GraphifyMcpClient {
       this.process.notify('notifications/initialized', {})
       this.isInitialized = true
     })()
+    this.initPromise = initialization
 
-    return this.initPromise
+    try {
+      await initialization
+    } catch (error) {
+      this.isInitialized = false
+      this.initPromise = null
+      await this.process.stop().catch(() => undefined)
+      throw error
+    }
+
+    return initialization
   }
 
   /**
@@ -101,10 +115,7 @@ export class GraphifyMcpClient {
 
     if (signal) {
       abortHandler = () => {
-        this.process.notify('notifications/cancelled', {
-          requestId: id,
-          reason: 'Tool execution aborted by caller',
-        })
+        this.process.cancel(id, `Tool call ${name} cancelled`)
       }
       signal.addEventListener('abort', abortHandler, { once: true })
     }
@@ -133,6 +144,38 @@ export class GraphifyMcpClient {
       if (signal && abortHandler) {
         signal.removeEventListener('abort', abortHandler)
       }
+    }
+  }
+
+  /** Lists Graphify MCP resources, including reports and graph analyses. */
+  async listResources(): Promise<McpResource[]> {
+    await this.init()
+    const { promise } = this.process.send('resources/list', {})
+    const response = await promise
+    if (response.error) {
+      throw new Error(`Failed to list Graphify resources: ${response.error.message}`)
+    }
+    const result = response.result as { resources?: McpResource[] }
+    return result?.resources || []
+  }
+
+  /** Reads one Graphify MCP resource by its URI. */
+  async readResource(uri: string, signal?: AbortSignal, timeoutMs?: number): Promise<McpResourceResult> {
+    await this.init()
+    if (signal?.aborted) throw new Error('Resource read aborted by signal')
+
+    const { id, promise } = this.process.send('resources/read', { uri }, timeoutMs)
+    const abortHandler = () => this.process.cancel(id, `Resource read ${uri} cancelled`)
+    signal?.addEventListener('abort', abortHandler, { once: true })
+
+    try {
+      const response = await promise
+      if (response.error) {
+        throw new Error(`Failed to read Graphify resource: ${response.error.message}`)
+      }
+      return (response.result as McpResourceResult) || { contents: [] }
+    } finally {
+      signal?.removeEventListener('abort', abortHandler)
     }
   }
 

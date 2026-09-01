@@ -3,6 +3,7 @@ import readline from 'node:readline'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Config } from './config.ts'
+import type { GraphifyCommandRequest } from './commands.ts'
 import type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification } from './types.ts'
 
 interface PendingRequest {
@@ -11,16 +12,27 @@ interface PendingRequest {
   timer?: NodeJS.Timeout
 }
 
+/** Child-process termination details retained for actionable MCP diagnostics. */
+export interface GraphifyServerExit {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+  readonly stderr: string
+}
+
+/** Command used to start a local Graphify process. */
+export interface GraphifyCommand {
+  readonly command: string
+  readonly args: string[]
+}
+
 /**
  * Resolves the command and arguments to launch the Graphify MCP server.
  */
 export function resolveGraphifyCommand(
   config: Config,
   graphPath?: string,
-  cwd: string = process.cwd()
-): { command: string; args: string[] } {
-  // If user supplied a custom command (other than the default 'graphify'), respect it.
-  if (config.command && config.command !== 'graphify') {
+): GraphifyCommand {
+  if (config.command !== 'auto') {
     const args = [...config.args]
     if (graphPath && !args.includes('--graph') && !args.includes(graphPath)) {
       args.push('--graph', graphPath)
@@ -28,55 +40,95 @@ export function resolveGraphifyCommand(
     return { command: config.command, args }
   }
 
-  // Check if uv is available
-  const hasUv = isCommandAvailable('uv')
-  if (hasUv) {
-    const args = ['run', '--with', 'graphifyy', '--with', 'mcp', '-m', 'graphify.serve']
+  const installedPython = findInstalledGraphifyPython()
+  if (installedPython) {
+    const args = ['-m', 'graphify.serve']
     if (graphPath) {
       args.push(graphPath)
     }
-    return { command: 'uv', args }
+    return { command: installedPython, args }
   }
 
-  // Check common Python/uv locations or fallback to python3
-  const candidatePythons = [
-    path.join(process.env.HOME || '', '.local/share/uv/tools/graphifyy/bin/python'),
-    '/usr/local/bin/python3',
-    '/usr/bin/python3',
-    'python3',
-  ]
-
-  for (const py of candidatePythons) {
-    if (py === 'python3' || fs.existsSync(py)) {
-      const args = ['-m', 'graphify.serve']
-      if (graphPath) {
-        args.push(graphPath)
-      }
-      return { command: py, args }
-    }
+  if (!isCommandAvailable('uv')) {
+    throw new Error(
+      'Graphify is unavailable. Install `graphifyy[mcp]` with uv or pipx, or configure command and args for `python -m graphify.serve`.'
+    )
   }
 
-  // Fallback to configured command
-  const args = [...config.args]
+  const packageSpec = config.graphifyVersion
+    ? `graphifyy[mcp]==${config.graphifyVersion}`
+    : 'graphifyy[mcp]'
+  const args = ['run', '--with', packageSpec, '-m', 'graphify.serve']
   if (graphPath) {
     args.push(graphPath)
   }
-  return { command: config.command || 'graphify', args }
+  return { command: 'uv', args }
+}
+
+/** Resolves the CLI used by the direct build and update command. */
+export function resolveGraphifyCliCommand(config: Config, request: GraphifyCommandRequest): GraphifyCommand {
+  const operation = request.operation === 'update' ? ['update'] : []
+  if (config.cliCommand) {
+    return {
+      command: config.cliCommand,
+      args: [...config.cliArgs, ...operation, request.projectRoot, ...request.flags],
+    }
+  }
+
+  const installed = findCommand('graphify')
+  if (installed) {
+    return {
+      command: installed,
+      args: [...operation, request.projectRoot, ...request.flags],
+    }
+  }
+
+  if (!isCommandAvailable('uv')) {
+    throw new Error('Graphify CLI is unavailable. Install `graphifyy` with uv or pipx, or configure cliCommand.')
+  }
+
+  const packageSpec = config.graphifyVersion ? `graphifyy==${config.graphifyVersion}` : 'graphifyy'
+  return {
+    command: 'uv',
+    args: ['run', '--with', packageSpec, 'graphify', ...operation, request.projectRoot, ...request.flags],
+  }
+}
+
+/** Resolves the interpreter behind an installed Graphify console script. */
+function findInstalledGraphifyPython(): string | undefined {
+  const executable = findCommand('graphify')
+  if (!executable) return undefined
+
+  try {
+    const firstLine = fs.readFileSync(executable, 'utf8').split(/\r?\n/, 1)[0]
+    const match = /^#!(.+)$/.exec(firstLine)
+    if (match && fs.existsSync(match[1])) {
+      return match[1]
+    }
+  } catch {
+    // A non-script launcher falls through to the uv fallback.
+  }
+
+  return undefined
 }
 
 function isCommandAvailable(cmd: string): boolean {
+  return findCommand(cmd) !== undefined
+}
+
+function findCommand(cmd: string): string | undefined {
   try {
     const paths = (process.env.PATH || '').split(path.delimiter)
     for (const p of paths) {
       const full = path.join(p, cmd)
       if (fs.existsSync(full)) {
-        return true
+        return full
       }
     }
   } catch {
     // Ignore stat errors
   }
-  return false
+  return undefined
 }
 
 /**
@@ -93,6 +145,7 @@ export class GraphifyServerProcess {
   private readonly args: string[]
   private readonly cwd: string
   private readonly defaultTimeoutMs: number
+  private readonly exitListeners = new Set<(exit: GraphifyServerExit) => void>()
 
   constructor(
     command: string,
@@ -115,24 +168,21 @@ export class GraphifyServerProcess {
     this.isShuttingDown = false
     this.stderrBuffer = []
 
-    // Scrub sensitive environment variables
-    const scrubbedEnv = { ...process.env }
-    for (const key of Object.keys(scrubbedEnv)) {
-      if (/key|secret|token|password/i.test(key) && !/deepseek|graphify/i.test(key)) {
-        delete scrubbedEnv[key]
-      }
-    }
-
     this.child = spawn(this.command, this.args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: scrubbedEnv,
     })
 
     this.exitPromise = new Promise<void>((resolve) => {
-      this.child?.once('close', () => {
-        this.cleanupPending(new Error('Graphify MCP server process closed'))
+      this.child?.once('close', (code, signal) => {
+        const exit: GraphifyServerExit = {
+          code,
+          signal,
+          stderr: this.getRecentStderr(),
+        }
+        this.cleanupPending(new Error(this.describeExit(exit)))
         this.child = null
+        for (const listener of this.exitListeners) listener(exit)
         resolve()
       })
     })
@@ -155,6 +205,12 @@ export class GraphifyServerProcess {
       const rl = readline.createInterface({ input: this.child.stdout })
       rl.on('line', (line) => this.handleLine(line))
     }
+  }
+
+  /** Subscribe to unexpected and intentional child exits. */
+  onExit(listener: (exit: GraphifyServerExit) => void): () => void {
+    this.exitListeners.add(listener)
+    return () => this.exitListeners.delete(listener)
   }
 
   /**
@@ -226,6 +282,17 @@ export class GraphifyServerProcess {
     }
   }
 
+  /** Cancels a request locally and notifies an MCP server that supports cancellation. */
+  cancel(id: number | string, reason: string): void {
+    const pending = this.pending.get(id)
+    if (pending) {
+      this.pending.delete(id)
+      if (pending.timer) clearTimeout(pending.timer)
+      pending.reject(new Error(reason))
+    }
+    this.notify('notifications/cancelled', { requestId: id, reason })
+  }
+
   /**
    * Returns recent stderr logs for diagnostics.
    */
@@ -253,7 +320,7 @@ export class GraphifyServerProcess {
     if (graceMs > 0) {
       forceKillTimer = setTimeout(() => {
         try {
-          if (child && !child.killed) {
+          if (child.exitCode === null && child.signalCode === null) {
             child.kill('SIGKILL')
           }
         } catch {
@@ -294,5 +361,13 @@ export class GraphifyServerProcess {
       req.reject(error)
     }
     this.pending.clear()
+  }
+
+  private describeExit(exit: GraphifyServerExit): string {
+    const status = exit.signal ? `signal ${exit.signal}` : `code ${exit.code ?? 'unknown'}`
+    const stderr = exit.stderr.trim()
+    return stderr
+      ? `Graphify MCP server exited with ${status}: ${stderr}`
+      : `Graphify MCP server exited with ${status}`
   }
 }

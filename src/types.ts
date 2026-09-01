@@ -56,7 +56,13 @@ export interface ToolRunContext {
   /** Opaque execution token. */
   token?: symbol
   /** Calling agent instance if available. */
-  agent?: unknown
+  agent?: {
+    readonly session: {
+      readonly header: {
+        readonly cwd?: string
+      }
+    }
+  }
   /** Defer additional context into the agent turn. */
   deferContext?: (context: unknown) => void
   /** Mark successful result as terminal for the turn. */
@@ -94,6 +100,14 @@ export interface McpToolInfo {
   name: string
   description?: string
   inputSchema?: JsonSchemaNode
+}
+
+/** Graphify MCP resource advertised through `resources/list`. */
+export interface McpResource {
+  uri: string
+  name: string
+  description?: string
+  mimeType?: string
 }
 
 /** MCP JSON-RPC 2.0 Request. */
@@ -136,10 +150,18 @@ export interface McpCallResult {
   [key: string]: unknown
 }
 
+/** Result returned by Graphify's `resources/read` MCP request. */
+export interface McpResourceResult {
+  contents: Array<{
+    uri?: string
+    mimeType?: string
+    text?: string
+    blob?: string
+  }>
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    effect: (callback: () => unknown) => () => void
-    inject: (deps: string[], callback: (ctx: Context) => void) => () => void
     tools: {
       register: (tool: ToolDefinition) => () => void
       execute?: (input: unknown) => Promise<unknown>

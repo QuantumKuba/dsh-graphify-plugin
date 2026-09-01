@@ -9,6 +9,7 @@ import type { ToolDefinition, PromptSection } from '../lib/types/types.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
+const serverPath = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
 describe('Built Library Distribution', () => {
   it('loads built plugin and executes tools successfully', async () => {
@@ -34,12 +35,14 @@ describe('Built Library Distribution', () => {
 
     const fiber = await ctx.plugin(GraphifyBuiltPlugin, {
       cwd: fixtureDir,
+      command: process.execPath,
+      args: [serverPath],
       autoDetect: true,
       enablePromptSection: true,
     })
 
     try {
-      assert.equal(registeredTools.size, 10)
+      assert.equal(registeredTools.size, 13)
       assert.ok(registeredSections.has('graphify:guidance'))
 
       const statsTool = registeredTools.get('graph_stats')!
@@ -48,7 +51,7 @@ describe('Built Library Distribution', () => {
         isError?: boolean
       }
       assert.equal(result.isError, false)
-      assert.ok(result.text.includes('Nodes:'))
+      assert.ok(result.text.includes('graph_stats'))
     } finally {
       await fiber.dispose()
       assert.equal(registeredTools.size, 0)

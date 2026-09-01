@@ -1,359 +1,110 @@
 # dsh-graphify
 
-[![CI Status](https://github.com/QuantumKuba/dsh-graphify-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/QuantumKuba/dsh-graphify-plugin/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/dsh-graphify.svg)](https://www.npmjs.com/package/dsh-graphify)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Cordis](https://img.shields.io/badge/Cordis-v4-orange.svg)](https://cordis.moe)
+`dsh-graphify` connects [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) to [Graphify](https://github.com/Graphify-Labs/graphify): a local knowledge graph with architecture queries, dependency paths, communities, and pull-request impact analysis.
 
-Native [Graphify](https://github.com/deepseek-ai/graphify) Knowledge Graph Plugin for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness).
+The plugin uses the receiving DSH session’s project directory. It does not assume that the DSH host process started in the project, so one interactive DSH process can safely serve several workspaces.
 
-This plugin connects DeepSeek Harness to Graphify's code intelligence engine, exposing **10 native code intelligence tools**, **god nodes discovery**, **community clustering**, **dependency traversal**, and **PR impact triage** directly to the agent loop.
+## Install
 
----
-
-## Why dsh-graphify?
-
-Standard coding agents often waste context tokens and compute running linear, unindexed grep sweeps across repositories. `dsh-graphify` gives the agent topological awareness of your codebase:
-
-- **Architectural Hubs**: Instantly identify god nodes and core abstractions.
-- **Topological Search**: Perform BFS/DFS traversals over code relationships rather than blind keyword search.
-- **Blast Radius Analysis**: Assess PR impact across code communities before applying changes.
-- **Zero Configuration**: Auto-detects existing `graphify-out/graph.json` in your workspace.
-
----
-
-## Architecture
-
-```
-                                  +------------------------+
-                                  | DeepSeek Harness (DSH) |
-                                  +-----------+------------+
-                                              |
-                                      apply(ctx, config)
-                                              |
-                     +------------------------+------------------------+
-                     |                                                 |
-             ctx.systemPrompt                                      ctx.tools
-                     |                                                 |
-         [graphify:guidance prompt]                          [10 Graphify Tools]
-                     |                                                 |
-                     v                                         execute(args, exec)
-          Agent Context Injected                                       |
-                                                           +-----------v------------+
-                                                           |   GraphifyMcpClient    |
-                                                           +-----------+------------+
-                                                                       |
-                                                               JSON-RPC 2.0 (stdio)
-                                                                       |
-                                                           +-----------v------------+
-                                                           |  Graphify MCP Server   |
-                                                           |  (python -m graphify)  |
-                                                           +-----------+------------+
-                                                                       |
-                                                           +-----------v------------+
-                                                           | graphify-out/graph.json|
-                                                           +------------------------+
-```
-
----
-
-## Setup Tutorial: Getting Started
-
-Follow these steps to set up Graphify and integrate it into your DeepSeek Harness environment.
-
-### Prerequisites
-
-- **Node.js**: `^20.0.0` or `>=22.0.0`
-- **pnpm**: `^9.0.0`
-- **Python**: `>=3.10` with [`uv`](https://docs.astral.sh/uv/) installed (recommended)
-
----
-
-### Step 1: Install the Graphify CLI
-
-Graphify powers the background MCP server and knowledge graph generator. Install it using `uv` or `pip`:
+Install Graphify with its MCP extra. The extra is required for `python -m graphify.serve`.
 
 ```sh
-# Recommended: Install via uv tool
-uv tool install graphifyy
-
-# Alternative: Install via pip
-pip install graphifyy
-```
-
-Verify that Graphify is available:
-
-```sh
-uv run --with graphifyy graphify --help
-```
-
----
-
-### Step 2: Generate the Knowledge Graph for Your Workspace
-
-Navigate to your target project directory and run the Graphify indexer:
-
-```sh
-cd /path/to/your/project
-graphify .
-```
-
-This generates a `graphify-out/` folder containing:
-- `graphify-out/graph.json` — The serialized knowledge graph.
-- `graphify-out/GRAPH_REPORT.md` — Architectural overview and god nodes report.
-- `graphify-out/graph.html` — Interactive visual graph explorer.
-
-*(Note: You do not need to manually start the MCP server. Once `graphify-out/graph.json` exists, DeepSeek Harness automatically launches and connects to the background Graphify MCP server over stdio).*
-
----
-
-### Step 3: Install `dsh-graphify` in Your DSH Project
-
-Add `dsh-graphify` to your DeepSeek Harness repository or workspace:
-
-```sh
+uv tool install 'graphifyy[mcp]'
 pnpm add dsh-graphify
 ```
 
----
+Build the first graph from the project root:
 
-### Step 4: Enable the Plugin in Configuration
+```sh
+graphify .
+```
 
-#### Option A: Bundle Patch (`cordis.patch.yml`)
-If you use DSH bundle layers, add the plugin patch:
+Add the bundle to a DSH patch:
 
 ```yaml
 - insert:
     - id: graphify
       name: dsh-graphify
       config:
-        autoDetect: true
-        enablePromptSection: true
-        timeoutMs: 60000
+        cwd: /absolute/path/to/project
 ```
 
-#### Option B: Application Config (`cordis.yml`)
-If you configure plugins in your profile `cordis.yml`:
+`cwd` is optional when the DSH session already has a project cwd or Graphify can find `graphify-out/graph.json` from the DSH startup directory. Set it when configuring a process-wide plugin for a fixed project.
+
+## Commands and tools
+
+The direct human command is available only in interactive DSH adapters that compose `ctx.commands`. A headless `dsh` invocation treats `/graphify` as model input; use normal Graphify CLI commands when running headless.
+
+```text
+/graphify                         build the receiving session’s project
+/graphify build ../another-project
+/graphify update                  incrementally rebuild changed code
+/graphify update . --force
+```
+
+The command accepts one path plus `--force` or `--no-cluster`. Graph questions belong in model tools, not the slash command.
+
+The plugin exposes Graphify’s native MCP tools:
+
+- `query_graph`, `get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, and `shortest_path`
+- `list_prs`, `get_pr_impact`, and `triage_prs`
+
+It also exposes three compatibility tools:
+
+- `graphify_capabilities` lists the installed server’s tools and resources.
+- `graphify_call` invokes a newly added Graphify MCP tool before this package releases a dedicated DSH schema.
+- `graphify_resource` reads Graphify resources such as `graphify://report`, graph statistics, confidence audit, and suggested questions.
+
+Every native tool supplies `project_path` automatically from the calling agent’s session cwd. An explicit `project_path` always wins.
+
+## Runtime configuration
+
+The default `command: auto` first uses the interpreter behind an installed `graphify` command. If Graphify is not installed, it uses `uv run --with graphifyy[mcp]`. The installed runtime is preferred so a working deployment does not download a different Graphify version at every DSH startup.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `command` | `auto` | MCP server executable. Configure this with `args` for a custom server runtime. |
+| `args` | `[]` | Arguments for a configured MCP server executable. |
+| `graphifyVersion` | unset | Version used only by the `uv` fallback, for example `0.9.50`. |
+| `cliCommand` | unset | Executable used for `/graphify`; defaults to the installed `graphify` command. |
+| `cliArgs` | `[]` | Arguments placed before the Graphify build or update operation. |
+| `graphPath` | unset | Explicit `graph.json` path. |
+| `cwd` | unset | Fixed fallback project directory. |
+| `autoDetect` | `true` | Search ancestors for `graphify-out/graph.json`. |
+| `enablePromptSection` | `true` | Tell the model when to use Graphify. |
+| `timeoutMs` | `60000` | Per-MCP-operation timeout in milliseconds. |
+| `toolPrefix` | `''` | Prefix every registered tool name. |
+
+For example, a pinned custom Python runtime is configured as follows:
 
 ```yaml
-plugins:
-  dsh-graphify:
-    autoDetect: true
-    enablePromptSection: true
-    timeoutMs: 60000
+config:
+  command: /opt/graphify/bin/python
+  args: ['-m', 'graphify.serve']
+  cliCommand: /opt/graphify/bin/graphify
 ```
 
-#### Option C: Programmatic Mounting
-In a custom Cordis runtime application:
+The plugin preserves the environment passed by DSH. This is necessary for Graphify’s GitHub PR tools to use `GH_TOKEN` or `GITHUB_TOKEN`. Configure credentials through DSH’s credential mechanism; do not put secrets in the patch file.
 
-```typescript
-import { Context } from '@deepseek-ai/cordis'
-import * as GraphifyPlugin from 'dsh-graphify'
+## Keeping Graphify current
 
-const ctx = new Context()
-await ctx.plugin(GraphifyPlugin, {
-  autoDetect: true,
-  enablePromptSection: true,
-})
-```
+There are two independent update loops:
 
----
+1. Keep graph data current with `graphify hook install` and `graphify update .` after code changes. Graphify also provides `graphify watch <path>` for a long-running local watcher.
+2. Keep the Graphify runtime current with `uv tool upgrade graphifyy` followed by `graphify hook install` when hooks are used. Use `uv tool install --reinstall 'graphifyy[mcp]'` if the MCP extra was not originally installed.
 
-### Step 5: Launch DSH and Verify
+This repository runs a weekly scheduled GitHub Actions contract test against the latest `graphifyy[mcp]`. It verifies MCP initialization, the core tool list, and Graphify resources before a release is made. Production deployments can pin `graphifyVersion` while qualifying a new version, then upgrade deliberately.
 
-Start your DeepSeek Harness session:
+## Development
 
 ```sh
-pnpm dsh --profile headless "Analyze the architecture and core hub nodes of this project"
-```
-
-The model will automatically receive guidance via `graphify:guidance` and query the graph using `god_nodes` or `query_graph`.
-
----
-
-## Functionality Overview
-
-### 1. Implemented MCP Tools (10 Native Tools)
-
-All 10 tools are registered to `ctx.tools` with JSON schemas and support cooperative `AbortSignal` cancellation:
-
-| Tool | Purpose | Key Parameters |
-| :--- | :--- | :--- |
-| `query_graph` | BFS or DFS traversal over code nodes and relational edges | `question` *(required)*, `mode` (`'bfs'`/`'dfs'`), `depth` (1-6), `token_budget`, `project_path` |
-| `get_node` | Retrieve full node details, signatures, docstrings, and attributes | `label` *(required)*, `project_path` |
-| `get_neighbors` | Retrieve immediate neighbors with edge types and relational metadata | `label` *(required)*, `relation_filter`, `token_budget`, `project_path` |
-| `get_community` | Inspect all symbols and files within a modular community cluster | `community_id` *(required)*, `token_budget`, `project_path` |
-| `god_nodes` | Identify the highest-degree architectural hub nodes in the graph | `top_n` (default: 10), `project_path` |
-| `graph_stats` | Summary statistics (node count, edge count, density, confidence) | `project_path` |
-| `shortest_path` | Find the shortest dependency or call path between two concepts | `source` *(required)*, `target` *(required)*, `max_hops`, `undirected`, `project_path` |
-| `list_prs` | List open GitHub PRs with CI status and community blast radius | `base`, `repo`, `project_path` |
-| `get_pr_impact` | Detailed blast radius of a pull request against graph communities | `pr_number` *(required)*, `repo`, `project_path` |
-| `triage_prs` | Prioritize open pull requests based on conflict risk and impact | `base`, `repo`, `project_path` |
-
----
-
-### 2. Workspace Auto-Detection
-
-The `detectGraph()` engine traverses ancestor directories starting at `process.cwd()` to find:
-- `<dir>/graphify-out/graph.json`
-- `<dir>/.graphify_root`
-
-When detected, the plugin automatically configures the working directory and injects links to `GRAPH_REPORT.md` and wiki documentation.
-
----
-
-### 3. Subprocess Lifecycle & Standalone MCP Server
-
-#### Automatic Lifecycle (Default)
-When DeepSeek Harness boots with `dsh-graphify`, **you do not need to manually start or maintain a separate MCP server process**. The plugin automatically spawns and supervises the server child process over `stdio`:
-- **Executable Resolution**: Auto-detects `uv`, virtual environments, or system `python3`.
-- **Environment Scrubbing**: Redacts sensitive API keys and tokens from the child environment.
-- **Cooperative Cancellation**: Connects DSH `AbortSignal` tokens to MCP `notifications/cancelled`.
-- **Graceful Quiescence**: Shuts down cleanly via `SIGTERM` with an automated `SIGKILL` timeout fallback on plugin disposal.
-
-#### Running the MCP Server Standalone (Manual / Debugging)
-If you wish to test the Graphify MCP server independently, inspect JSON-RPC communication directly, or connect it to another MCP client (such as Claude Desktop, Cursor, or Antigravity IDE), you can start it manually with:
-
-```sh
-# Recommended: Run via uv in your project root (auto-detects ./graphify-out/graph.json)
-uv run --with graphifyy --with mcp -m graphify.serve
-
-# Explicit path (when running from a different directory):
-uv run --with graphifyy --with mcp -m graphify.serve /path/to/graphify-out/graph.json
-
-# Alternative: Run with python3
-python3 -m graphify.serve
-
-# Alternative: Run via the graphify CLI
-graphify serve
-```
-
----
-
-### 4. Dynamic System Prompt Section
-
-Registers `graphify:guidance` on `ctx.systemPrompt`, instructing the model on:
-- Prioritizing graph queries before expensive multi-file grep sweeps.
-- When to choose BFS (`query_graph`) vs. hub discovery (`god_nodes`) vs. path tracing (`shortest_path`).
-- Paths to generated architectural reports and wiki indexes.
-
----
-
-### 5. Slash Command (`/graphify`)
-
-Registers a `/graphify [path]` slash command on `ctx.commands` (when available in DSH), allowing users to trigger knowledge graph generation or re-indexing directly from the chat interface.
-
----
-
-### 6. Cordis Microkernel & Effect Lifecycle
-
-All tool registrations, prompt sections, slash commands, and child processes are bound via `ctx.effect()`. Disposing the plugin or triggering Hot Module Reloading (HMR) cleanly terminates the subprocess and unregisters all tools with zero memory or process leaks.
-
----
-
-## Configuration Reference
-
-Options can be defined in `cordis.yml`, `cordis.patch.yml`, or passed to `ctx.plugin()`:
-
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `command` | `string` | `'graphify'` | CLI executable command (auto-resolves `uv` or `python3 -m graphify.serve`). |
-| `args` | `string[]` | `['serve', '--transport', 'stdio']` | Subprocess arguments for the Graphify MCP server. |
-| `graphPath` | `string` | `undefined` | Explicit path to `graph.json` (bypasses auto-detection when set). |
-| `autoDetect` | `boolean` | `true` | Probes parent directories for `graphify-out/graph.json`. |
-| `enablePromptSection` | `boolean` | `true` | Injects knowledge graph guidance into the agent system prompt. |
-| `timeoutMs` | `number` | `60000` | Cooperative timeout per tool execution in milliseconds. |
-| `serverName` | `string` | `'graphify'` | Stable identifier used for server registration and logs. |
-| `toolPrefix` | `string` | `''` | Optional prefix for registered tools (e.g. `'kg_'` -> `'kg_query_graph'`). |
-| `cwd` | `string` | `undefined` | Working directory for the Graphify subprocess. |
-
----
-
-## Roadmap & Remaining TODOs
-
-The following features and enhancements are planned for upcoming releases:
-
-- [ ] **Live Incremental Graph Updates**:
-  - Integrate a filesystem watcher (`chokidar` / FS events) to trigger incremental graph re-indexing upon source file edits.
-- [ ] **DSH Web UI Visual Graph Cards**:
-  - Implement Web card presentation renderers to display interactive D3 / ForceGraph visual graphs directly inside the DSH Web client.
-- [ ] **Hybrid Semantic + Topological Search**:
-  - Combine vector embeddings with graph topology for dual lexical and structural retrieval.
-- [ ] **Remote / SSE MCP Server Transport**:
-  - Support connecting to remote Graphify MCP servers over Server-Sent Events (SSE) and WebSockets in addition to local `stdio`.
-- [ ] **Streaming Output for Large Traversals**:
-  - Add streaming token generation for large sub-graph dumps and community cluster exports.
-- [ ] **Dedicated PR Review Autonomous Agent Preset**:
-  - Create a `@deepseek-ai/dsh-bundle-pr-review` preset layer that autonomously triages PRs and checks community blast radius before merging.
-
----
-
-## Programmatic Usage
-
-You can also use the underlying `GraphifyMcpClient` or `detectGraph` utilities independently:
-
-```typescript
-import { GraphifyMcpClient, detectGraph } from 'dsh-graphify'
-
-// 1. Detect existing graph
-const detected = detectGraph(process.cwd())
-console.log('Detected graph:', detected?.graphJsonPath)
-
-// 2. Initialize MCP client
-const client = new GraphifyMcpClient({
-  command: 'uv',
-  args: ['run', '--with', 'graphifyy', '--with', 'mcp', '-m', 'graphify.serve', detected?.graphJsonPath || ''],
-  cwd: process.cwd(),
-})
-
-// 3. Execute queries
-const stats = await client.callTool('graph_stats', {})
-console.log(stats)
-
-// 4. Dispose client when done
-await client.dispose()
-```
-
----
-
-## Troubleshooting
-
-### `uv: command not found` or Python errors
-- Ensure `uv` or `python3` (>=3.10) is installed and available on your system `$PATH`.
-- You can specify an explicit executable path in configuration via `command: '/path/to/python'`.
-
-### `No graph detected in workspace`
-- Run `graphify .` in your workspace root to generate `graphify-out/graph.json`.
-- Alternatively, set `graphPath: '/absolute/path/to/graph.json'` in your plugin configuration.
-
-### Tool Execution Timeouts
-- For massive monorepos, graph queries might take longer. Increase `timeoutMs` in your config (e.g. `timeoutMs: 120000`).
-
----
-
-## Development & Testing
-
-```sh
-# Install dependencies
-pnpm install
-
-# Compile TypeScript to lib/ and lib/types/
-pnpm run build
-
-# Validate static types
 pnpm run typecheck
-
-# Run test suite
+pnpm run build
 pnpm test
-
-# Clean build artifacts
-pnpm run clean
 ```
 
----
+Unit tests use a local fake MCP server and never require Graphify, a network connection, or a user cache. Run the upstream compatibility contract after installing `graphifyy[mcp]`:
 
-## License
-
-[MIT](LICENSE) © DeepSeek
+```sh
+GRAPHIFY_E2E=1 pnpm run test:e2e
+```

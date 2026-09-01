@@ -51,7 +51,8 @@
   "scripts": {
     "clean": "rm -rf lib",
     "build": "tsc",
-    "test": "node --import tsx --test",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:e2e": "node --import tsx --test test/graphify-e2e.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm run clean && pnpm run build && pnpm test"
   },

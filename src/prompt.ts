@@ -20,10 +20,12 @@ When navigating, understanding architecture, or planning changes:
 - Use \`get_neighbors\` and \`get_node\` for detailed inspection of specific nodes and their connections.
 - Use \`get_community\` to inspect module members and architectural cluster boundaries.
 - Use \`list_prs\`, \`get_pr_impact\`, and \`triage_prs\` when reviewing GitHub pull requests and assessing blast radius.
+- Use \`graphify_resource\` for the report, confidence audit, and other Graphify resources.
+- Use \`graphify_capabilities\` before \`graphify_call\` when a newer Graphify version exposes a tool without a dedicated DSH definition.
 
 Rules:
 - Query the graph before performing large unindexed codebase sweeps when investigating architecture.
-- If \`project_path\` is omitted, the graph tools automatically resolve against the current workspace graph.`
+- If \`project_path\` is omitted, the graph tools resolve against the calling session’s project directory.`
 
       if (detectedGraph?.reportPath) {
         base += `\n- A detailed report is available at \`${detectedGraph.reportPath}\`.`

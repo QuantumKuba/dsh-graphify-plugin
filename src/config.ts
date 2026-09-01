@@ -5,16 +5,28 @@ import Schema from '@deepseek-ai/schemastery'
  */
 export interface Config {
   /**
-   * Executable or command used to run Graphify.
-   * Defaults to 'graphify', with automatic resolution fallback to python3 -m graphify.
+   * MCP server executable. Set this with `args` to bypass automatic Graphify
+   * runtime discovery.
    */
   command: string
 
   /**
-   * Arguments passed to the Graphify executable to run the MCP server.
-   * Defaults to ['serve', '--transport', 'stdio'].
+   * Arguments passed to a configured MCP server executable.
    */
   args: string[]
+
+  /**
+   * Optional Graphify package version used when automatic discovery falls back
+   * to uv. Pin a release for reproducible deployments; omit for uv's latest
+   * compatible release.
+   */
+  graphifyVersion?: string
+
+  /** Optional Graphify CLI executable for the `/graphify` command. */
+  cliCommand?: string
+
+  /** Arguments preceding Graphify's build or update operation. */
+  cliArgs: string[]
 
   /**
    * Optional explicit path to graph.json.
@@ -41,12 +53,6 @@ export interface Config {
   timeoutMs: number
 
   /**
-   * Stable namespace / server name for Graphify integration.
-   * Defaults to 'graphify'.
-   */
-  serverName: string
-
-  /**
    * Optional prefix for registered tool names (e.g. 'graphify_' or '').
    * Defaults to '' (keeps native tool names like query_graph, get_node).
    */
@@ -60,13 +66,15 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  command: Schema.string().default('graphify').description('Graphify CLI executable command'),
-  args: Schema.array(Schema.string()).default(['serve', '--transport', 'stdio']).description('Arguments to launch Graphify MCP server'),
+  command: Schema.string().default('auto').description('MCP server executable, or auto to discover Graphify'),
+  args: Schema.array(Schema.string()).default([]).description('Arguments for a configured MCP server executable'),
+  graphifyVersion: Schema.string().description('Pinned graphifyy version for uv fallback, for example 0.9.50'),
+  cliCommand: Schema.string().description('Graphify CLI executable for the direct command'),
+  cliArgs: Schema.array(Schema.string()).default([]).description('Arguments preceding the direct Graphify operation'),
   graphPath: Schema.string().description('Explicit absolute or relative path to graph.json'),
   autoDetect: Schema.boolean().default(true).description('Automatically detect graphify-out/graph.json in workspace'),
   enablePromptSection: Schema.boolean().default(true).description('Register system prompt guidance for Graphify tools'),
   timeoutMs: Schema.number().default(60000).description('Per-tool-call timeout in milliseconds'),
-  serverName: Schema.string().default('graphify').description('Stable identifier for the Graphify server'),
   toolPrefix: Schema.string().default('').description('Optional prefix for registered tool names'),
   cwd: Schema.string().description('Explicit working directory for Graphify subprocess'),
 })

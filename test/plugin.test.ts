@@ -9,6 +9,7 @@ import type { CommandDefinition } from '../src/commands.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
+const serverPath = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
 describe('Graphify Plugin Integration', () => {
   it('mounts plugin, registers all tools, prompt section, and slash command', async () => {
@@ -51,6 +52,8 @@ describe('Graphify Plugin Integration', () => {
     // Mount Graphify plugin and await fiber activation
     const fiber = await ctx.plugin(GraphifyPlugin, {
       cwd: fixtureDir,
+      command: process.execPath,
+      args: [serverPath],
       autoDetect: true,
       enablePromptSection: true,
     })
@@ -64,8 +67,8 @@ describe('Graphify Plugin Integration', () => {
       assert.ok(promptText.includes('Graphify Knowledge Graph'))
       assert.ok(promptText.includes('query_graph'))
 
-      // 2. Verify all 10 tools are registered
-      assert.equal(registeredTools.size, 10)
+      // 2. Verify native tools plus forward-compatible capability accessors
+      assert.equal(registeredTools.size, 13)
       const expectedTools = [
         'query_graph',
         'get_node',
@@ -77,6 +80,9 @@ describe('Graphify Plugin Integration', () => {
         'list_prs',
         'get_pr_impact',
         'triage_prs',
+        'graphify_capabilities',
+        'graphify_call',
+        'graphify_resource',
       ]
       for (const name of expectedTools) {
         assert.ok(registeredTools.has(name), `Missing tool: ${name}`)
@@ -94,7 +100,7 @@ describe('Graphify Plugin Integration', () => {
         isError?: boolean
       }
       assert.equal(statsExecResult.isError, false)
-      assert.ok(statsExecResult.text.includes('Nodes:'))
+      assert.ok(statsExecResult.text.includes('graph_stats'))
       const renderedBlocks = statsTool.output.render({}, statsExecResult)
       assert.ok(renderedBlocks.length > 0)
       assert.equal(renderedBlocks[0].type, 'text')
@@ -106,7 +112,7 @@ describe('Graphify Plugin Integration', () => {
         isError?: boolean
       }
       assert.equal(godResult.isError, false)
-      assert.ok(godResult.text.includes('God nodes'))
+      assert.ok(godResult.text.includes('god_nodes'))
 
       // 6. Test executing shortest_path tool
       const pathTool = registeredTools.get('shortest_path')!
@@ -121,10 +127,14 @@ describe('Graphify Plugin Integration', () => {
       const queryTool = registeredTools.get('query_graph')!
       const queryResult = (await queryTool.execute(
         { question: 'What is Cordis?' },
-        { signal: new AbortController().signal }
+        {
+          signal: new AbortController().signal,
+          agent: { session: { header: { cwd: '/agent-project-root' } } },
+        }
       )) as { text: string; isError?: boolean }
       assert.equal(queryResult.isError, false)
       assert.ok(queryResult.text.length > 0)
+      assert.match(queryResult.text, /agent-project-root/)
 
       // 8. Test executing get_node tool
       const nodeTool = registeredTools.get('get_node')!
@@ -152,8 +162,19 @@ describe('Graphify Plugin Integration', () => {
       )) as { text: string; isError?: boolean }
       assert.equal(commResult.isError, false)
       assert.ok(commResult.text.length > 0)
+
+      // 11. Future Graphify capabilities and resources remain reachable.
+      const capabilities = registeredTools.get('graphify_capabilities')!
+      const capabilitiesResult = (await capabilities.execute({}, { signal: new AbortController().signal })) as { text: string }
+      assert.match(capabilitiesResult.text, /future_tool/)
+      const resource = registeredTools.get('graphify_resource')!
+      const resourceResult = (await resource.execute(
+        { uri: 'graphify://report' },
+        { signal: new AbortController().signal }
+      )) as { text: string }
+      assert.equal(resourceResult.text, '# Graph Report')
     } finally {
-      // 11. Test graceful disposal and unregistration
+      // 12. Test graceful disposal and unregistration
       await fiber.dispose()
       assert.equal(registeredTools.size, 0, 'All tools should be unregistered upon plugin disposal')
       assert.equal(registeredSections.size, 0, 'Prompt section should be unregistered upon plugin disposal')
@@ -184,6 +205,8 @@ describe('Graphify Plugin Integration', () => {
 
     const fiber = await ctx.plugin(GraphifyPlugin, {
       cwd: fixtureDir,
+      command: process.execPath,
+      args: [serverPath],
       toolPrefix: 'kg_',
       enablePromptSection: false,
     })

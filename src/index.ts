@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './config.ts'
 import { detectGraph } from './detector.ts'
-import { resolveGraphifyCommand } from './server-process.ts'
+import { resolveGraphifyCommand, resolveGraphifyCliCommand } from './server-process.ts'
 import { GraphifyMcpClient } from './client.ts'
 import { registerGraphifyTools } from './tools.ts'
 import { registerGraphifyPrompt } from './prompt.ts'
@@ -16,6 +16,7 @@ export { GraphifyMcpClient } from './client.ts'
 export { createGraphifyToolDefinitions, registerGraphifyTools } from './tools.ts'
 export { createGraphifyPromptSection, registerGraphifyPrompt } from './prompt.ts'
 export { registerGraphifyCommand } from './commands.ts'
+export { resolveGraphifyCommand, resolveGraphifyCliCommand } from './server-process.ts'
 
 /**
  * DeepSeek Harness Graphify Plugin.
@@ -25,19 +26,17 @@ export { registerGraphifyCommand } from './commands.ts'
  */
 export function apply(ctx: Context, config?: Config): void {
   const cfg = Config(config ?? ({} as Config))
+  const configuredRoot = cfg.cwd || process.cwd()
 
-  // 1. Detect existing graph in workspace or configured path
   const detectedGraph = cfg.autoDetect
-    ? detectGraph(cfg.cwd || process.cwd(), cfg.graphPath)
+    ? detectGraph(configuredRoot, cfg.graphPath)
     : cfg.graphPath
-      ? detectGraph(process.cwd(), cfg.graphPath)
+      ? detectGraph(configuredRoot, cfg.graphPath)
       : null
 
-  // 2. Resolve Graphify execution command
-  const workingDir = cfg.cwd || detectedGraph?.projectRoot || process.cwd()
-  const { command, args } = resolveGraphifyCommand(cfg, detectedGraph?.graphJsonPath, workingDir)
+  const workingDir = detectedGraph?.projectRoot || configuredRoot
+  const { command, args } = resolveGraphifyCommand(cfg, detectedGraph?.graphJsonPath)
 
-  // 3. Create MCP Client
   const client = new GraphifyMcpClient({
     command,
     args,
@@ -45,7 +44,6 @@ export function apply(ctx: Context, config?: Config): void {
     timeoutMs: cfg.timeoutMs,
   })
 
-  // 4. Attach reversible Cordis effect managing tool/prompt registrations and process lifecycle
   ctx.effect(() => {
     const unregisterPrompt = cfg.enablePromptSection
       ? registerGraphifyPrompt(ctx, detectedGraph)
@@ -72,10 +70,9 @@ export function apply(ctx: Context, config?: Config): void {
     }
   })
 
-  // 5. Optionally register /graphify slash command when ctx.commands is composed
   ctx.inject(['commands'], (cmdCtx) => {
     cmdCtx.effect(() => {
-      const unregisterCommand = registerGraphifyCommand(cmdCtx, cfg, detectedGraph)
+      const unregisterCommand = registerGraphifyCommand(cmdCtx, cfg, workingDir)
       return () => {
         try {
           unregisterCommand()

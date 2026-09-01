@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { GraphifyMcpClient } from './client.ts'
 import type { Config } from './config.ts'
-import type { DetectedGraph, ToolDefinition, ContentBlock, JsonSchemaNode } from './types.ts'
+import type { DetectedGraph, ToolDefinition, ToolRunContext, ContentBlock, JsonSchemaNode } from './types.ts'
 
 export interface GraphifyToolOutput {
   text: string
@@ -27,7 +27,7 @@ function renderOutput(_args: unknown, value: unknown): ContentBlock[] {
 }
 
 /**
- * Creates the complete definitions for all 10 Graphify tools.
+ * Creates Graphify's native tools plus capability and resource accessors.
  */
 export function createGraphifyToolDefinitions(
   client: GraphifyMcpClient,
@@ -37,14 +37,19 @@ export function createGraphifyToolDefinitions(
   const prefix = config.toolPrefix || ''
   const defaultProjectPath = detectedGraph?.projectRoot || config.cwd || process.cwd()
 
-  async function executeTool(rawName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<GraphifyToolOutput> {
+  async function executeTool(
+    rawName: string,
+    rawArgs: Record<string, unknown>,
+    execution?: ToolRunContext
+  ): Promise<GraphifyToolOutput> {
     const args = { ...rawArgs }
-    if (!args.project_path && defaultProjectPath) {
-      args.project_path = defaultProjectPath
+    const agentProjectPath = execution?.agent?.session.header.cwd
+    if (!args.project_path) {
+      args.project_path = agentProjectPath || defaultProjectPath
     }
 
     try {
-      const result = await client.callTool(rawName, args, signal, config.timeoutMs)
+      const result = await client.callTool(rawName, args, execution?.signal, config.timeoutMs)
       const text = result.content?.map((c) => c.text || '').join('\n') || ''
       return {
         text,
@@ -60,7 +65,7 @@ export function createGraphifyToolDefinitions(
     }
   }
 
-  return [
+  const definitions: ToolDefinition[] = [
     {
       name: `${prefix}query_graph`,
       description: 'Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context.',
@@ -78,7 +83,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('query_graph', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('query_graph', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}get_node`,
@@ -93,7 +98,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('get_node', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('get_node', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}get_neighbors`,
@@ -110,7 +115,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('get_neighbors', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('get_neighbors', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}get_community`,
@@ -126,7 +131,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('get_community', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('get_community', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}god_nodes`,
@@ -140,7 +145,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('god_nodes', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('god_nodes', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}graph_stats`,
@@ -153,7 +158,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('graph_stats', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('graph_stats', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}shortest_path`,
@@ -171,7 +176,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('shortest_path', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('shortest_path', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}list_prs`,
@@ -186,7 +191,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('list_prs', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('list_prs', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}get_pr_impact`,
@@ -202,7 +207,7 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('get_pr_impact', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('get_pr_impact', (args as Record<string, unknown>) || {}, exec),
     },
     {
       name: `${prefix}triage_prs`,
@@ -217,9 +222,73 @@ export function createGraphifyToolDefinitions(
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('triage_prs', (args as Record<string, unknown>) || {}, exec?.signal),
+      execute: (args, exec) => executeTool('triage_prs', (args as Record<string, unknown>) || {}, exec),
     },
   ]
+
+  definitions.push(
+    {
+      name: `${prefix}graphify_capabilities`,
+      description: 'List the Graphify MCP tools and resources supplied by the installed Graphify version.',
+      parameters: { type: 'object', properties: {} },
+      output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
+      timeoutMs: config.timeoutMs,
+      execute: async (_args, exec) => {
+        try {
+          const [tools, resources] = await Promise.all([client.listTools(), client.listResources()])
+          return {
+            text: JSON.stringify({ tools, resources }, null, 2),
+            meta: { tools, resources },
+          } satisfies GraphifyToolOutput
+        } catch (error) {
+          return { text: `Error listing Graphify capabilities: ${String(error)}`, isError: true }
+        }
+      },
+    },
+    {
+      name: `${prefix}graphify_call`,
+      description: 'Call an installed Graphify MCP tool that is not natively exposed by this plugin. Use graphify_capabilities first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Exact Graphify MCP tool name.' },
+          arguments: { type: 'object', description: 'Arguments matching the tool schema.' },
+        },
+        required: ['name'],
+      },
+      output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
+      timeoutMs: config.timeoutMs,
+      execute: (args, exec) => {
+        const input = (args as { name: string; arguments?: Record<string, unknown> }) || { name: '' }
+        return executeTool(input.name, input.arguments || {}, exec)
+      },
+    },
+    {
+      name: `${prefix}graphify_resource`,
+      description: 'Read a Graphify MCP resource, including reports and analyses. Use graphify_capabilities to list resource URIs.',
+      parameters: {
+        type: 'object',
+        properties: { uri: { type: 'string', description: 'Exact Graphify MCP resource URI.' } },
+        required: ['uri'],
+      },
+      output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
+      timeoutMs: config.timeoutMs,
+      execute: async (args, exec) => {
+        const uri = (args as { uri: string }).uri
+        try {
+          const resource = await client.readResource(uri, exec.signal, config.timeoutMs)
+          return {
+            text: resource.contents.map((content) => content.text || content.blob || '').join('\n'),
+            meta: resource,
+          } satisfies GraphifyToolOutput
+        } catch (error) {
+          return { text: `Error reading Graphify resource: ${String(error)}`, isError: true }
+        }
+      },
+    }
+  )
+
+  return definitions
 }
 
 /**

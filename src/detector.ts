@@ -28,7 +28,7 @@ export function detectGraph(
         if (fs.existsSync(outJson)) {
           return buildDetectedGraph(resolved, outJson, path.join(resolved, 'graphify-out'))
         }
-      } else if (stats.isFile()) {
+      } else if (stats.isFile() && path.basename(resolved) === 'graph.json') {
         const graphDir = path.dirname(resolved)
         const projectRoot = path.basename(graphDir) === 'graphify-out' ? path.dirname(graphDir) : graphDir
         return buildDetectedGraph(projectRoot, resolved, graphDir)
@@ -47,7 +47,8 @@ export function detectGraph(
     const candidateOutDir = path.join(current, 'graphify-out')
     const candidateGraphJson = path.join(candidateOutDir, 'graph.json')
     if (fs.existsSync(candidateGraphJson)) {
-      return buildDetectedGraph(current, candidateGraphJson, candidateOutDir)
+      const markerPath = path.join(candidateOutDir, '.graphify_root')
+      return buildDetectedGraph(readGraphifyRoot(markerPath) || current, candidateGraphJson, candidateOutDir)
     }
 
     // Check if current is already graphify-out/
@@ -58,14 +59,6 @@ export function detectGraph(
       }
     }
 
-    // Check if .graphify_root exists
-    const candidateRootMarker = path.join(current, '.graphify_root')
-    if (fs.existsSync(candidateRootMarker)) {
-      const markerOutDir = path.join(current, 'graphify-out')
-      const markerJson = path.join(markerOutDir, 'graph.json')
-      return buildDetectedGraph(current, markerJson, markerOutDir)
-    }
-
     if (current === root) break
     const parent = path.dirname(current)
     if (parent === current) break
@@ -73,6 +66,16 @@ export function detectGraph(
   }
 
   return null
+}
+
+/** Reads Graphify's optional authoritative scan-root marker. */
+function readGraphifyRoot(markerPath: string): string | undefined {
+  try {
+    const value = fs.readFileSync(markerPath, 'utf8').replace(/^\uFEFF/, '').trim()
+    return value && path.isAbsolute(value) ? path.resolve(value) : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function buildDetectedGraph(projectRoot: string, graphJsonPath: string, graphDir: string): DetectedGraph {

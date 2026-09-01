@@ -13,12 +13,12 @@ const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
 describe('detector & config', () => {
   it('validates default config schema', () => {
     const config = Config({})
-    assert.equal(config.command, 'graphify')
-    assert.deepEqual(config.args, ['serve', '--transport', 'stdio'])
+    assert.equal(config.command, 'auto')
+    assert.deepEqual(config.args, [])
+    assert.deepEqual(config.cliArgs, [])
     assert.equal(config.autoDetect, true)
     assert.equal(config.enablePromptSection, true)
     assert.equal(config.timeoutMs, 60000)
-    assert.equal(config.serverName, 'graphify')
   })
 
   it('detects graph in current workspace directory', () => {
@@ -54,5 +54,17 @@ describe('detector & config', () => {
     assert.ok(detected)
     assert.equal(detected.graphJsonPath, explicitPath)
   })
-})
 
+  it('uses Graphify’s graphify-out root marker when present', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-graphify-marker-'))
+    const outputDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(outputDir)
+    fs.writeFileSync(path.join(outputDir, 'graph.json'), '{}')
+    fs.writeFileSync(path.join(outputDir, '.graphify_root'), fixtureDir)
+    try {
+      assert.equal(detectGraph(tempDir)?.projectRoot, fixtureDir)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+})
