@@ -19,9 +19,17 @@ describe('DSH client manifest', () => {
       default: './lib/graphify-client.js',
     })
     assert.equal(manifest.dsh?.client?.platform, 'web')
+    assert.deepEqual(manifest.dsh?.client?.inject, [
+      '@deepseek-ai/dsh-client-locale',
+      '@deepseek-ai/dsh-client-ui-conversation',
+    ])
+    const bundle = fs.readFileSync(path.join(repositoryRoot, 'lib/graphify-client.js'), 'utf8')
     assert.match(
-      fs.readFileSync(path.join(repositoryRoot, 'lib/graphify-client.js'), 'utf8'),
+      bundle,
       /window\.__ModuleLoader__\.load\(\{\s*id: "dsh-graphify"/,
     )
+    assert.match(bundle, /"uiConversation"/)
+    assert.doesNotMatch(bundle, /"conversationEvents"/)
+    assert.doesNotMatch(bundle, /dsh-client-runtime/)
   })
 })

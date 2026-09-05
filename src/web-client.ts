@@ -3,7 +3,7 @@ import { MessageText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { graphifyCommandInputDefinition } from './web-command.ts'
 export { graphifyCommandInputDefinition, graphifyCommandText } from './web-command.ts'
 
@@ -21,6 +21,17 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Graphify command presentation copy. */
     graphify: GraphifyLocaleKey
+  }
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Target-neutral Conversation registries and per-Session assembly. */
+    uiConversation: {
+      readonly events: {
+        register(definition: unknown): () => void
+      }
+    }
   }
 }
 
@@ -80,14 +91,14 @@ export const GraphifyCommandInputView = memo(function GraphifyCommandInputView({
 })
 
 /** Required DSH Web services for the Graphify command projection and renderer. */
-export const inject = ['slots', 'locale', 'conversationEvents']
+export const inject = ['slots', 'locale', 'uiConversation']
 
 /**
  * Registers Graphify's browser-side DSH command presentation.
  * @param ctx - DSH client Cordis context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.conversationEvents.register(graphifyCommandInputDefinition)
+  ctx.uiConversation.events.register(graphifyCommandInputDefinition)
   ctx.effect(
     () => ctx.locale.register('graphify', { zh, en }),
     'dsh-graphify: dictionaries',

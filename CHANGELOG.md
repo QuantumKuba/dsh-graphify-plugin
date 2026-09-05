@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] - 2026-09-05
+
+### Fixed
+- **DSH Web Boot Activation**:
+  - Replaced legacy `conversationEvents` dependency injection with official `uiConversation` service (`ctx.uiConversation.events.register`).
+  - Fixed `web boot: 1 entry did not activate dsh-graphify: pending (waiting for service: conversationEvents)` error.
+
+### Changed
+- **Client Architecture Modernization**:
+  - Removed references to the discontinued `@deepseek-ai/dsh-client-runtime` package.
+  - Aligned client context types with `@deepseek-ai/cordis` and conversation contracts.
+  - Broadened peer dependency ranges for `@deepseek-ai/*` packages to `>=0.1.1-rc.2` for compatibility with DeepSeek Harness `0.1.3-alpha.1`+.
+
 ## [0.1.0] - 2026-08-31
 
 ### Added
