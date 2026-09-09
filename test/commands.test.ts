@@ -17,7 +17,13 @@ describe('/graphify command', () => {
       projectRoot: path.join(fixtureDir, 'docs'),
       flags: ['--force'],
     })
+    assert.deepEqual(parseGraphifyCommand('build . --code-only --no-viz', fixtureDir), {
+      operation: 'build',
+      projectRoot: fixtureDir,
+      flags: ['--code-only', '--no-viz'],
+    })
     assert.throws(() => parseGraphifyCommand('query auth flow', fixtureDir), /Queries belong/i)
+    assert.throws(() => parseGraphifyCommand('update . --invalid-flag', fixtureDir), /Only --force, --no-cluster, --code-only, and --no-viz/i)
     assert.equal(
       parseGraphifyCommand('build "project with spaces"', fixtureDir).projectRoot,
       path.join(fixtureDir, 'project with spaces')

@@ -68,7 +68,7 @@ export interface Config {
 export const Config: Schema<Config> = Schema.object({
   command: Schema.string().default('auto').description('MCP server executable, or auto to discover Graphify'),
   args: Schema.array(Schema.string()).default([]).description('Arguments for a configured MCP server executable'),
-  graphifyVersion: Schema.string().description('Pinned graphifyy version for uv fallback, for example 0.9.50'),
+  graphifyVersion: Schema.string().description('Pinned graphifyy version for uv fallback, for example 0.9.57'),
   cliCommand: Schema.string().description('Graphify CLI executable for the direct command'),
   cliArgs: Schema.array(Schema.string()).default([]).description('Arguments preceding the direct Graphify operation'),
   graphPath: Schema.string().description('Explicit absolute or relative path to graph.json'),

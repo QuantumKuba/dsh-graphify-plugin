@@ -46,8 +46,10 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+export const ALLOWED_GRAPHIFY_FLAGS = ['--force', '--no-cluster', '--code-only', '--no-viz'] as const
+
 /**
- * Parses `/graphify [build|update] [path] [--force|--no-cluster]` against the
+ * Parses `/graphify [build|update] [path] [--force|--no-cluster|--code-only|--no-viz]` against the
  * receiving Session's project root.
  */
 export function parseGraphifyCommand(rawInput: string, projectRoot: string): GraphifyCommandRequest {
@@ -60,8 +62,8 @@ export function parseGraphifyCommand(rawInput: string, projectRoot: string): Gra
   if (paths.length > 1) {
     throw new Error('Use one project path. Queries belong in Graphify tools, not `/graphify`.')
   }
-  if (flags.some((flag) => !['--force', '--no-cluster'].includes(flag))) {
-    throw new Error('Only --force and --no-cluster are accepted by `/graphify`.')
+  if (flags.some((flag) => !ALLOWED_GRAPHIFY_FLAGS.includes(flag as (typeof ALLOWED_GRAPHIFY_FLAGS)[number]))) {
+    throw new Error('Only --force, --no-cluster, --code-only, and --no-viz are accepted by `/graphify`.')
   }
 
   return {
@@ -118,7 +120,7 @@ export function registerGraphifyCommand(
   const def: CommandDefinition = {
     name: 'graphify',
     description: 'Build or incrementally update this project’s Graphify knowledge graph.',
-    input: { hint: '[build|update] [path] [--force|--no-cluster]' },
+    input: { hint: '[build|update] [path] [--force|--no-cluster|--code-only|--no-viz]' },
     async handler(invocation: CommandInvocation): Promise<CommandResult> {
       try {
         const projectRoot = invocation.agent.session.header.cwd || defaultProjectRoot

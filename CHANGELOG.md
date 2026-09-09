@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.3] - 2026-09-09
+
+### Added
+- **Graphify v0.9.57 Compatibility**:
+  - Direct executable auto-discovery for standalone `graphify-mcp` binary installed by Graphify.
+  - Added `exclude_hubs_percentile` parameter (`number`, 0-100) to `god_nodes` tool definition for matching `cluster()` hub suppression.
+  - Expanded `/graphify` slash command to support `--code-only` (local AST indexing without LLM credits) and `--no-viz` (suppressing HTML generation for large graphs/CI) flags in addition to `--force` and `--no-cluster`.
+  - Updated prompt guidance with hub suppression and explicit resource URI references (`graphify://report`, `graphify://stats`, `graphify://god-nodes`, `graphify://surprises`, `graphify://audit`, `graphify://questions`).
+- **Tests & Verification**:
+  - Added test coverage for `exclude_hubs_percentile`, additional command flags, `graphify-mcp` auto-discovery, and verified against Graphify v0.9.57 release contract.
+
 ## [0.1.2] - 2026-09-05
 
 ### Fixed

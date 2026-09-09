@@ -15,12 +15,12 @@ This workspace has access to a Graphify knowledge graph with god nodes, communit
 
 When navigating, understanding architecture, or planning changes:
 - Use \`query_graph\` to perform BFS/DFS traversals for natural language questions and concept exploration.
-- Use \`god_nodes\` to discover central architectural abstractions and high-degree hub nodes.
+- Use \`god_nodes\` to discover central architectural abstractions and high-degree hub nodes (optionally filtering extreme hubs with \`exclude_hubs_percentile\`).
 - Use \`shortest_path\` to trace direct dependency and call relationships between two symbols or files.
 - Use \`get_neighbors\` and \`get_node\` for detailed inspection of specific nodes and their connections.
 - Use \`get_community\` to inspect module members and architectural cluster boundaries.
 - Use \`list_prs\`, \`get_pr_impact\`, and \`triage_prs\` when reviewing GitHub pull requests and assessing blast radius.
-- Use \`graphify_resource\` for the report, confidence audit, and other Graphify resources.
+- Use \`graphify_resource\` for the report, stats, god-nodes, surprises, confidence audit, and suggested questions resources (\`graphify://report\`, \`graphify://stats\`, \`graphify://god-nodes\`, \`graphify://surprises\`, \`graphify://audit\`, \`graphify://questions\`).
 - Use \`graphify_capabilities\` before \`graphify_call\` when a newer Graphify version exposes a tool without a dedicated DSH definition.
 
 Rules:

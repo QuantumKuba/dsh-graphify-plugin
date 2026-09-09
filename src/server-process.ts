@@ -40,6 +40,15 @@ export function resolveGraphifyCommand(
     return { command: config.command, args }
   }
 
+  const installedMcp = findCommand('graphify-mcp')
+  if (installedMcp) {
+    const args: string[] = []
+    if (graphPath) {
+      args.push(graphPath)
+    }
+    return { command: installedMcp, args }
+  }
+
   const installedPython = findInstalledGraphifyPython()
   if (installedPython) {
     const args = ['-m', 'graphify.serve']
@@ -51,7 +60,7 @@ export function resolveGraphifyCommand(
 
   if (!isCommandAvailable('uv')) {
     throw new Error(
-      'Graphify is unavailable. Install `graphifyy[mcp]` with uv or pipx, or configure command and args for `python -m graphify.serve`.'
+      'Graphify is unavailable. Install `graphifyy[mcp]` with uv or pipx, or configure command and args for `graphify-mcp` or `python -m graphify.serve`.'
     )
   }
 

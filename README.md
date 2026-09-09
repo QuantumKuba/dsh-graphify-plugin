@@ -44,7 +44,7 @@ In DSH Web, the package's browser companion renders the submitted `/graphify` li
 /graphify update . --force
 ```
 
-The command accepts one path plus `--force` or `--no-cluster`. Graph questions belong in model tools, not the slash command.
+The command accepts one path plus `--force`, `--no-cluster`, `--code-only`, or `--no-viz`. Graph questions belong in model tools, not the slash command.
 
 The plugin exposes Graphify’s native MCP tools:
 
@@ -63,13 +63,13 @@ You do not need to start `python -m graphify.serve` separately. The plugin start
 
 ## Runtime configuration
 
-The default `command: auto` first uses the interpreter behind an installed `graphify` command. If Graphify is not installed, it uses `uv run --with graphifyy[mcp]`. The installed runtime is preferred so a working deployment does not download a different Graphify version at every DSH startup.
+The default `command: auto` first checks for an installed `graphify-mcp` executable or the interpreter behind an installed `graphify` command. If Graphify is not installed, it uses `uv run --with graphifyy[mcp]`. The installed runtime is preferred so a working deployment does not download a different Graphify version at every DSH startup.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `command` | `auto` | MCP server executable. Configure this with `args` for a custom server runtime. |
 | `args` | `[]` | Arguments for a configured MCP server executable. |
-| `graphifyVersion` | unset | Version used only by the `uv` fallback, for example `0.9.50`. |
+| `graphifyVersion` | unset | Version used only by the `uv` fallback, for example `0.9.57`. |
 | `cliCommand` | unset | Executable used for `/graphify`; defaults to the installed `graphify` command. |
 | `cliArgs` | `[]` | Arguments placed before the Graphify build or update operation. |
 | `graphPath` | unset | Explicit `graph.json` path. |

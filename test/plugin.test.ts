@@ -107,12 +107,17 @@ describe('Graphify Plugin Integration', () => {
 
       // 5. Test executing god_nodes tool
       const godTool = registeredTools.get('god_nodes')!
-      const godResult = (await godTool.execute({ top_n: 5 }, { signal: new AbortController().signal })) as {
+      assert.ok('exclude_hubs_percentile' in (godTool.parameters.properties as Record<string, unknown>))
+      const godResult = (await godTool.execute(
+        { top_n: 5, exclude_hubs_percentile: 95 },
+        { signal: new AbortController().signal }
+      )) as {
         text: string
         isError?: boolean
       }
       assert.equal(godResult.isError, false)
       assert.ok(godResult.text.includes('god_nodes'))
+      assert.match(godResult.text, /exclude_hubs_percentile/)
 
       // 6. Test executing shortest_path tool
       const pathTool = registeredTools.get('shortest_path')!

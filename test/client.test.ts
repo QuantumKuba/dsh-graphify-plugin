@@ -25,6 +25,16 @@ describe('GraphifyMcpClient', () => {
     assert.deepEqual(resolveGraphifyCommand(config), { command: process.execPath, args: [serverPath] })
   })
 
+  it('discovers graphify-mcp or python runtime when auto command is specified', () => {
+    const config = Config({ command: 'auto' })
+    const graphPath = path.join(fixtureDir, 'graphify-out', 'graph.json')
+    const resolved = resolveGraphifyCommand(config, graphPath)
+    assert.ok(resolved.command.length > 0)
+    if (resolved.command.includes('graphify-mcp')) {
+      assert.deepEqual(resolved.args, [graphPath])
+    }
+  })
+
   it('initializes, discovers tools and resources, and calls the server', async () => {
     const client = createClient()
     try {

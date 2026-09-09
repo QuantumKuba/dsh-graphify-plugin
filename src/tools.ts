@@ -140,6 +140,10 @@ export function createGraphifyToolDefinitions(
         type: 'object',
         properties: {
           top_n: { type: 'integer', default: 10, description: 'Number of top connected nodes to return' },
+          exclude_hubs_percentile: {
+            type: 'number',
+            description: 'Suppress nodes whose degree exceeds this percentile (0-100) of the degree distribution, matching cluster() hub exclusion',
+          },
           project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
         },
       },
