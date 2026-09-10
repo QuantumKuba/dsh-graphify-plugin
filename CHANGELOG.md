@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Replaced ad-hoc JSON-RPC transport with `@modelcontextprotocol/sdk` (`Client` and `StdioClientTransport`).
   - Added generation tracking to prevent race conditions and zombie subprocess leaks on reconnect.
   - Implemented bounded exponential backoff reconnection with state machine handling handshake failures and attempt tracking (`reconnect.maxAttempts`, `reconnect.initialDelayMs`, `reconnect.maxDelayMs`).
-  - Added stderr ring buffer retaining the last 50 lines / 64 KB for post-mortem diagnostics on crash.
+  - Added stderr ring buffer retaining up to 50 chunks / 64 KiB for post-mortem diagnostics on crash.
   - Implemented cooperative cancellation with `AbortSignal` across all transport calls.
 - **Diagnostic Doctor Tool (`graphify_status`)**:
   - Added `graphify_status` tool reporting runtime command and discovery source, MCP transport health, reconnect attempts, project resolution details, graph timestamps, and staleness metrics.
@@ -39,6 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `BENCHMARK.md` detailing an 8-category, 12-metric evaluation protocol comparing DeepSeek Harness agents with and without Graphify on 20B–30B local LLMs.
 - **Upstream DeepSeek Harness Compatibility CI**:
   - Added `.github/workflows/dsh-compatibility.yml` verifying plugin builds and contracts across supported DeepSeek Harness dependency versions.
+
+### Fixed
+- **False-Fresh Prevention & Proven Code Classification**:
+  - Implemented all-or-nothing auto-update eligibility verifying that only changes to proven built-in AST code extensions (`.ts`, `.py`, `.go`, `.rs`, `.java`, etc.) can trigger incremental update.
+  - Changes to semantic documentation (`.md`), manifests (`package.json`, `pyproject.toml`), configs, or unproven file types preserve staleness and emit actionable notices directing full refresh.
+  - Handled rename and deletion semantics safely (both old and new paths must be proven code files).
+- **Custom `graphPath` Canonical Integrity**:
+  - Prevented false-fresh metadata recording on custom graphPath targets when `graphify update` or `/graphify` updates the canonical project graph.
+  - Implemented 4-tier project-root resolution for explicit graphs: `.graphify_root` marker validation, evidence-checked session root association, canonical layout inference, and directory fallback.
+- **Git Staging Invariance**:
+  - Removed git index/staging (`--cached`) from working-tree fingerprinting while maintaining binary correctness (`--binary`) and untracked file content hashing.
+  - Staging (`git add`) or unstaging (`git reset`) identical file bytes never alters freshness state.
+- **Symlink-Safe Resource Boundaries**:
+  - Hardened `graphify_project_resource` with `fs.realpathSync` path containment and `stat.isFile()` validation to prevent directory traversal and symlink escapes.
+- **Process Quiescence Semantics**:
+  - Fixed `terminateChildProcess` to wait for confirmed child process exit and stdio closure before resolving, removing premature resolution on `child.killed === true`.
+- **Expedited Reconnect Failure Recovery**:
+  - Hardened expedited reconnection during backoff to survive failed handshakes, preserve the retry chain, and reconnect on subsequent attempts.
 
 ### Changed
 - Bumped version to `0.2.0`.

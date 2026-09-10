@@ -8,7 +8,7 @@ Built on the official `@modelcontextprotocol/sdk` stdio transport, `dsh-graphify
 
 ## Key Features
 
-- **MCP Transport via `@modelcontextprotocol/sdk`**: Replaces ad-hoc JSON-RPC with the official SDK client and stdio transport. Features generation tracking against zombie processes, bounded exponential backoff reconnection, stderr ring-buffer captures (50 lines / 64 KB), and cooperative `AbortSignal` cancellation.
+- **MCP Transport via `@modelcontextprotocol/sdk`**: Replaces ad-hoc JSON-RPC with the official SDK client and stdio transport. Features generation tracking against zombie processes, bounded exponential backoff reconnection, stderr ring-buffer captures (up to 50 chunks / 64 KiB), and cooperative `AbortSignal` cancellation.
 - **DeepSeek Harness & Cordis Native**: Compatible with newest DeepSeek Harness releases (`dsh-session >=0.1.1-rc.2` through `0.1.5-alpha.2` / `0.1.2-rc.1`, Cordis `^4.0.1` / `4.0.2`). Native lifecycle hooks (`ctx.effect()`), session-scoped context resolution, and durable Web UI companion cards.
 - **Optimized for 20B–30B Local LLMs**: Offers `toolMode: 'compact'` exposing 6 high-signal tools with curated descriptions and schema-constrained parameters to eliminate hallucinated tool choices and preserve context window budget.
 - **Session-Scoped Multi-Workspace Resolution**: Resolves project paths dynamically from DSH session context (`toolContext.agent.session.header.cwd`), ancestor graph detection, or configured overrides—enabling a single DSH instance to serve multiple workspaces safely.
@@ -112,9 +112,11 @@ Out-of-date graphs cause agents to hallucinate non-existent symbols or miss refa
 
 - **`freshness: { mode: 'warn' }` (Default)**: Injects an actionable warning into tool responses when git commits or file modifications occurred after the graph was last built.
 - **`freshness: { mode: 'auto', updateTimeoutMs: 120000 }`**: Automatically triggers a coalesced pre-query incremental graph update via `ProjectUpdateCoalescer` before executing tools when staleness is detected. The process lock is held until child process termination, preventing duplicate jobs and race conditions across concurrent sessions.
+  - **All-or-Nothing Auto-Update Policy**: `graphify update` incrementally extracts core code files with built-in AST extractors (`.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`, `.java`, `.cpp`, `.c`, `.cs`, `.rb`, `.kt`, `.swift`, `.php`, `.lua`, `.zig`, `.sh`). If any non-code file (such as `.md` docs, `package.json`, `pyproject.toml`, or configuration files) has changed, auto-update is skipped, the graph remains stale, and an actionable notice is returned guiding the user to run a full refresh (`/graphify update . --force` or `/graphify build`).
+  - **Canonical Target Requirement**: `graphify update` exclusively updates the canonical `<projectRoot>/graphify-out/graph.json`. Explicit or custom `graphPath` targets cannot be updated incrementally; they require a full build or rebuild.
 - **`freshness: { mode: 'off' }`**: Disables freshness evaluation for airgapped or static environments.
 
-In monorepos and subprojects, git status and diff checks are scoped to the resolved project root (`-- .`), ensuring only changes within the active workspace affect freshness evaluation.
+In monorepos and subprojects, git status and diff checks are scoped to the resolved project root (`-- .`), ensuring only changes within the active workspace affect freshness evaluation. Git staging state (`git add` / `git reset`) is excluded from working-tree fingerprinting, ensuring freshness reflects actual working tree bytes rather than index staging state.
 
 ---
 
