@@ -540,4 +540,87 @@ describe('Graph Freshness and Coalescing', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('detects staleness when an untracked file is modified with identical byte size', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-untracked-samesize-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'committed.txt'), 'committed')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Create untracked file
+    const untrackedPath = path.join(tempDir, 'untracked.ts')
+    fs.writeFileSync(untrackedPath, 'const a = 100;') // length 14 bytes
+
+    try {
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // Modify untracked file with EXACT SAME byte length (14 bytes) but different content
+      fs.writeFileSync(untrackedPath, 'const b = 200;') // length 14 bytes
+      const staleCheck = checkGraphFreshness(project)
+      assert.equal(staleCheck.state, 'stale')
+      assert.match(staleCheck.reason, /Working tree changed/i)
+
+      // Re-index metadata should restore freshness
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('excludes custom graph path directory from working-tree fingerprinting to prevent self-invalidation', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-custom-fresh-'))
+    const customGraphDir = path.join(tempDir, 'custom-output')
+    fs.mkdirSync(customGraphDir, { recursive: true })
+    const customGraphPath = path.join(customGraphDir, 'graph.json')
+    fs.writeFileSync(customGraphPath, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'code.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    try {
+      // Write metadata beside custom graph
+      writeGraphifyIndexMetadata(tempDir, customGraphPath)
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: customGraphPath,
+        graphDir: customGraphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(customGraphPath).mtimeMs,
+      }
+
+      // Initial check must be fresh
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // Modifying/writing files inside custom-output should NOT make the working tree stale
+      fs.writeFileSync(path.join(customGraphDir, 'extra.txt'), 'extra output from graphify')
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // But modifying code outside custom-output DOES trigger staleness
+      fs.writeFileSync(path.join(tempDir, 'code.ts'), 'export const a = 2')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

@@ -47,16 +47,41 @@ export interface UpdateResult {
   readonly error?: string
 }
 
+/** Large-file threshold for streaming hash instead of full read (10 MB). */
+const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
+
 /**
  * Computes a deterministic fingerprint of the working tree's dirty state.
- * Includes tracked diffs, staged diffs, and untracked file manifest.
+ *
+ * Includes tracked diffs (with `--binary` for correct binary representation),
+ * staged diffs, and hashed content of every relevant untracked file.
+ *
+ * @param projectRoot - Repository root directory.
+ * @param excludePaths - Relative paths to exclude from fingerprint (e.g. custom
+ *   graph output directories and metadata files). Always excludes `graphify-out/`
+ *   and `.dsh-graphify-index.json` regardless.
  */
-function computeWorkingTreeFingerprint(projectRoot: string): string | undefined {
+function computeWorkingTreeFingerprint(
+  projectRoot: string,
+  excludePaths?: Set<string>
+): string | undefined {
   try {
     const hash = createHash('sha256')
 
-    // Tracked unstaged changes
-    const diffRes = spawnSync('git', ['diff', 'HEAD'], {
+    const isExcluded = (relativePath: string): boolean => {
+      if (relativePath.startsWith('graphify-out/') || relativePath === 'graphify-out' ||
+          relativePath.includes('/graphify-out/')) return true
+      if (path.basename(relativePath) === INDEX_METADATA_FILENAME) return true
+      if (excludePaths) {
+        for (const exc of excludePaths) {
+          if (relativePath === exc || relativePath.startsWith(exc + '/')) return true
+        }
+      }
+      return false
+    }
+
+    // Tracked unstaged changes (--binary captures binary diffs correctly)
+    const diffRes = spawnSync('git', ['diff', '--binary', 'HEAD'], {
       cwd: projectRoot,
       encoding: 'utf8',
       timeout: 5000,
@@ -65,8 +90,8 @@ function computeWorkingTreeFingerprint(projectRoot: string): string | undefined 
       hash.update(diffRes.stdout)
     }
 
-    // Staged changes
-    const cachedRes = spawnSync('git', ['diff', '--cached', 'HEAD'], {
+    // Staged changes (--binary for binary correctness, separate from unstaged)
+    const cachedRes = spawnSync('git', ['diff', '--cached', '--binary', 'HEAD'], {
       cwd: projectRoot,
       encoding: 'utf8',
       timeout: 5000,
@@ -75,7 +100,7 @@ function computeWorkingTreeFingerprint(projectRoot: string): string | undefined 
       hash.update(cachedRes.stdout)
     }
 
-    // Untracked files (sorted path:size manifest, excluding generated dirs)
+    // Untracked files: hash relative path + actual file content for each
     const untrackedRes = spawnSync('git', ['ls-files', '--others', '--exclude-standard'], {
       cwd: projectRoot,
       encoding: 'utf8',
@@ -83,16 +108,31 @@ function computeWorkingTreeFingerprint(projectRoot: string): string | undefined 
     })
     if (untrackedRes.status === 0 && untrackedRes.stdout.trim()) {
       const files = untrackedRes.stdout.trim().split('\n')
-        .filter(f => !f.startsWith('graphify-out/') && !f.includes('/graphify-out/'))
+        .filter(f => !isExcluded(f))
         .sort()
       for (const file of files) {
-        let size = 0
+        hash.update(`untracked:${file}\n`)
         try {
-          size = fs.statSync(path.join(projectRoot, file)).size
+          const fullPath = path.join(projectRoot, file)
+          const stat = fs.statSync(fullPath)
+          if (stat.size > LARGE_FILE_THRESHOLD) {
+            // Stream hash for large files to bound memory
+            const fd = fs.openSync(fullPath, 'r')
+            try {
+              const buf = Buffer.alloc(65536)
+              let bytesRead: number
+              while ((bytesRead = fs.readSync(fd, buf)) > 0) {
+                hash.update(buf.subarray(0, bytesRead))
+              }
+            } finally {
+              fs.closeSync(fd)
+            }
+          } else {
+            hash.update(fs.readFileSync(fullPath))
+          }
         } catch {
-          // Ignore unreadable files
+          hash.update('unreadable\n')
         }
-        hash.update(`${file}:${size}\n`)
       }
     }
 
@@ -100,6 +140,24 @@ function computeWorkingTreeFingerprint(projectRoot: string): string | undefined 
   } catch {
     return undefined
   }
+}
+
+/**
+ * Builds the set of relative paths that must be excluded from working-tree
+ * fingerprinting so that Graphify-generated output does not self-invalidate.
+ */
+function buildExcludePaths(projectRoot: string, graphPath: string): Set<string> {
+  const excludes = new Set<string>()
+  const graphDir = path.dirname(graphPath)
+  const relGraphDir = path.relative(projectRoot, graphDir)
+  if (relGraphDir && !relGraphDir.startsWith('..') && relGraphDir !== '.') {
+    excludes.add(relGraphDir)
+  }
+  const relGraphPath = path.relative(projectRoot, graphPath)
+  if (relGraphPath && !relGraphPath.startsWith('..')) {
+    excludes.add(relGraphPath)
+  }
+  return excludes
 }
 
 /**
@@ -118,6 +176,8 @@ export function writeGraphifyIndexMetadata(
   } catch {
     // Fall back to current time
   }
+
+  const excludePaths = buildExcludePaths(projectRoot, graphPath)
 
   let gitInfo: GraphifyIndexMetadata['git']
   try {
@@ -140,7 +200,7 @@ export function writeGraphifyIndexMetadata(
         timeout: 2000,
       })
       const branch = branchRes.status === 0 ? branchRes.stdout.trim() : null
-      const workingTreeFingerprint = computeWorkingTreeFingerprint(projectRoot)
+      const workingTreeFingerprint = computeWorkingTreeFingerprint(projectRoot, excludePaths)
 
       gitInfo = { head, tree, branch, workingTreeFingerprint }
     }
@@ -230,7 +290,7 @@ export function checkGraphFreshness(
   // 1. Check durable index metadata first if available (respects custom graphPath)
   const metadata = readGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
   if (metadata && metadata.git) {
-    const metaGitCheck = checkMetadataGitFreshness(project.projectRoot, metadata)
+    const metaGitCheck = checkMetadataGitFreshness(project.projectRoot, metadata, project.graphJsonPath)
     if (metaGitCheck) {
       return {
         ...metaGitCheck,
@@ -263,7 +323,8 @@ export function checkGraphFreshness(
 /** Checks freshness against durable git metadata (detects branch switches and commit changes). */
 function checkMetadataGitFreshness(
   projectRoot: string,
-  metadata: GraphifyIndexMetadata
+  metadata: GraphifyIndexMetadata,
+  graphJsonPath?: string | null
 ): Omit<GraphFreshnessInfo, 'lastIndexedTime'> | null {
   if (!metadata.git) return null
 
@@ -326,7 +387,8 @@ function checkMetadataGitFreshness(
     // the current working tree state. This allows indexing dirty repos without
     // perpetual false-positive staleness.
     if (metadata.version === 2 && metadata.git?.workingTreeFingerprint) {
-      const currentFingerprint = computeWorkingTreeFingerprint(projectRoot)
+      const excludePaths = graphJsonPath ? buildExcludePaths(projectRoot, graphJsonPath) : undefined
+      const currentFingerprint = computeWorkingTreeFingerprint(projectRoot, excludePaths)
       if (currentFingerprint && currentFingerprint === metadata.git.workingTreeFingerprint) {
         return {
           state: 'fresh',
@@ -581,11 +643,15 @@ export class ProjectUpdateCoalescer {
 
   /**
    * Runs or awaits an in-progress incremental update for the given project.
+   *
+   * @param graphJsonPath - When set, metadata is written beside this graph
+   *   (supports custom `graphPath` configurations).
    */
   async update(
     config: Config,
     projectRoot: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    graphJsonPath?: string | null
   ): Promise<UpdateResult> {
     const canonical = path.resolve(projectRoot)
     const existing = this.inProgress.get(canonical)
@@ -593,7 +659,7 @@ export class ProjectUpdateCoalescer {
       return existing
     }
 
-    const promise = this.executeIncrementalUpdate(config, canonical, signal)
+    const promise = this.executeIncrementalUpdate(config, canonical, signal, graphJsonPath)
     this.inProgress.set(canonical, promise)
 
     try {
@@ -606,7 +672,8 @@ export class ProjectUpdateCoalescer {
   private executeIncrementalUpdate(
     config: Config,
     projectRoot: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    graphJsonPath?: string | null
   ): Promise<UpdateResult> {
     return new Promise((resolve) => {
       const { command, args } = resolveGraphifyCliCommand(config, {
@@ -683,7 +750,7 @@ export class ProjectUpdateCoalescer {
 
         if (code === 0) {
           try {
-            writeGraphifyIndexMetadata(projectRoot)
+            writeGraphifyIndexMetadata(projectRoot, graphJsonPath ?? undefined)
           } catch {
             // Ignore metadata write error
           }
