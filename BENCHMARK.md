@@ -127,16 +127,17 @@ To prevent experimental drift and confounding variables, trials enforce:
 
 ---
 
-## 7. Statistical Power Analysis & Execution Protocol
+## 7. Statistical Methodology & Execution Protocol
 
 When implementing this experimental protocol:
-1. **Sample Size & Statistical Power**:
+1. **Sample Size & Experimental Structure**:
    - The benchmark specifies **50 standardized task cards** across the 8 categories.
-   - Running **3 repeated trials** per task per arm yields **150 trials per model condition**.
-   - Power analysis ($\alpha = 0.05, 1 - \beta = 0.80$) confirms $N = 150$ provides sufficient power to detect a $\ge 15\%$ absolute delta in binary success rate using McNemar's test for paired binary outcomes, and medium effect sizes (Cohen's $d \ge 0.45$) for continuous token and latency metrics using the Wilcoxon signed-rank test.
-2. **Confidence Intervals**: All reported metrics must include 95% bootstrap confidence intervals (1,000 resamples).
-3. **Execution Harness**: Implement a standalone benchmark runner under `benchmarks/` utilizing DeepSeek Harness's JSON-RPC client.
-4. **Reporting**: Publish automated comparison charts reporting:
+   - Running **3 repeated trials** per task card per condition yields 150 total task runs.
+   - Because repeated trials on the same task card share underlying structure and difficulty, analyses must account for the nested/repeated-measures design (e.g. hierarchical mixed-effects models or task-level paired aggregation) rather than treating all 150 runs as independent samples.
+   - For binary success rates, task-level paired comparisons (such as McNemar's test on majority-vote or first-run success) should calibrate sample size against task card count ($N=50$). Continuous metrics (tokens, TTFF, tool calls) should compare paired task-level medians via Wilcoxon signed-rank test.
+2. **Confidence Intervals**: All reported metrics should include 95% bootstrap confidence intervals clustered by task card (1,000 resamples).
+3. **Execution Harness**: A standalone benchmark runner may be implemented using DeepSeek Harness's JSON-RPC client or headless profile (this document defines the evaluation specification only).
+4. **Reporting**: Comparison summaries report:
    - *Token Reduction Ratio* ($Tokens_{\text{Control}} / Tokens_{\text{Graphify}}$)
    - *Localization Precision Delta* ($IrrelevantFiles_{\text{Control}} - IrrelevantFiles_{\text{Graphify}}$)
    - *Net Success Rate Delta* ($\Delta Success = Success_{\text{Graphify}} - Success_{\text{Control}}$)

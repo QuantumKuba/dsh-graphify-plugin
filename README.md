@@ -12,8 +12,8 @@ Built on the official `@modelcontextprotocol/sdk` stdio transport, `dsh-graphify
 - **DeepSeek Harness & Cordis Native**: Compatible with newest DeepSeek Harness releases (`dsh-session >=0.1.1-rc.2` through `0.1.5-alpha.2` / `0.1.2-rc.1`, Cordis `^4.0.1` / `4.0.2`). Native lifecycle hooks (`ctx.effect()`), session-scoped context resolution, and durable Web UI companion cards.
 - **Optimized for 20B–30B Local LLMs**: Offers `toolMode: 'compact'` exposing 6 high-signal tools with curated descriptions and schema-constrained parameters to eliminate hallucinated tool choices and preserve context window budget.
 - **Session-Scoped Multi-Workspace Resolution**: Resolves project paths dynamically from DSH session context (`toolContext.agent.session.header.cwd`), ancestor graph detection, or configured overrides—enabling a single DSH instance to serve multiple workspaces safely.
-- **Graph Freshness & Concurrency-Safe Updates**: Git- and mtime-based graph staleness detection with configurable warning (`freshness: 'warn'`) or automatic deduplicated background updating (`freshness: 'auto'`) via `ProjectUpdateCoalescer`.
-- **Diagnostic Doctor Tool (`graphify_status`)**: Self-healing environment inspection for models and developers, reporting Python/uv runtime paths, connection states, project mtimes, staleness metrics, and actionable remediation steps.
+- **Graph Freshness & Concurrency-Safe Updates**: Git- and mtime-based graph staleness detection with configurable warning (`freshness: { mode: 'warn' }`) or automatic deduplicated incremental updating (`freshness: { mode: 'auto' }`) via `ProjectUpdateCoalescer`.
+- **Diagnostic Doctor Tool (`graphify_status`)**: Environment diagnostic inspection for models and developers, reporting runtime resolution, connection states, project paths, staleness metrics, and actionable remediation advice.
 - **Decision Policy Prompting**: Injects high-agency navigation rules into the agent loop, teaching models when to use Graphify vs. grep/filesystem tools, and enforcing the authoritative verification loop (Graphify -> source files -> editor -> tests -> update).
 
 ---
@@ -50,7 +50,9 @@ Add the plugin to your DSH configuration or profile patch (e.g. `cordis.patch.ym
       name: dsh-graphify
       config:
         toolMode: compact       # Recommended for 20B-30B models (compact | full)
-        freshness: warn         # Freshness monitoring (warn | auto | off)
+        freshness:
+          mode: warn            # Freshness monitoring (warn | auto | off)
+          updateTimeoutMs: 120000
         autoDetect: true        # Walk parent directories to locate graphify-out/
 ```
 
@@ -58,7 +60,7 @@ Add the plugin to your DSH configuration or profile patch (e.g. `cordis.patch.ym
 
 ## Tool Modes & Agent Guidance
 
-Small and medium coding models (e.g. 20B–30B class) often suffer when 14+ specialized tools dilute attention and waste context tokens. `dsh-graphify` provides two tool modes:
+Small and medium coding models (e.g. 20B–30B class) often suffer when 15+ specialized tools dilute attention and waste context tokens. `dsh-graphify` provides two tool modes:
 
 ### Compact Mode (`toolMode: 'compact'`) — *Recommended for local LLMs*
 
@@ -71,14 +73,14 @@ Registers the 6 essential tools that handle 95% of agent code navigation:
 | `get_node` | Deep inspection of a specific symbol (AST type, file location, docstring, community). |
 | `get_neighbors` | Inspection of direct dependencies and dependents connected to a node. |
 | `shortest_path` | Exploration of dependency connection chains between two symbols. |
-| `graphify_resource` | Direct access to Graphify report, stats, and audit markdown resources. |
+| `graphify_project_resource` | Session-scoped access to Graphify report, wiki, and graph statistics. |
 
 ### Full Mode (`toolMode: 'full'`) — *Default for backwards compatibility*
 
-Includes all 6 compact tools plus 8 specialized tools:
+Includes all 6 compact tools plus 9 specialized tools:
 - Hub detection & community clustering: `god_nodes`, `get_community`, `graph_stats`
 - PR blast radius & triage: `list_prs`, `get_pr_impact`, `triage_prs`
-- Extensibility: `graphify_capabilities`, `graphify_call`
+- Extensibility & raw MCP: `graphify_capabilities`, `graphify_call`, `graphify_resource` (reads from server default project)
 
 ---
 
@@ -87,21 +89,17 @@ Includes all 6 compact tools plus 8 specialized tools:
 The `graphify_status` tool is exposed to both human operators and the model to verify environment health and troubleshoot graph issues:
 
 ```text
-=== Graphify Status ===
-Overall: healthy
-Runtime:
-  Command: /usr/local/bin/graphify-mcp (standalone-mcp)
-  Version: 0.9.57
-  Transport: connected (generation: 1)
-Project:
-  Project Path: /workspace/my-repo
-  Graph Path: /workspace/my-repo/graphify-out/graph.json (exists: true)
-  Last Built: 2026-09-10T00:15:30.000Z
-  Active Tool Mode: compact (6 tools registered)
-Freshness:
-  Status: fresh
-  Strategy: metadata
-=======================
+=== Graphify Status: HEALTHY ===
+• Project Root: /workspace/my-repo
+• Knowledge Graph: /workspace/my-repo/graphify-out/graph.json
+• Last Indexed: 2026-09-10T00:15:30.000Z
+• Graph Freshness: FRESH - Graph matches current Git HEAD and working tree fingerprint
+  Inspection Strategy: metadata
+• Git Repository: commit a1b2c3d (main), clean
+• Runtime: /usr/local/bin/graphify-mcp [installed]
+• MCP State: connected
+
+Graph is verified, connected, and ready for architectural and dependency queries.
 ```
 
 When issues are detected (e.g., missing runtime, missing graph, or stale files), `graphify_status` provides explicit remediation warnings guiding the agent to run `/graphify` or update the graph.
@@ -137,7 +135,7 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
-| `toolMode` | `'compact' \| 'full'` | `'full'` | Expose 6 core tools (`compact`) or all 14 tools (`full`). |
+| `toolMode` | `'compact' \| 'full'` | `'full'` | Expose 6 core tools (`compact`) or all 15 tools (`full`). |
 | `freshness.mode` | `'warn' \| 'auto' \| 'off'` | `'warn'` | Staleness policy: warn model, coalesced pre-query auto-update, or off. |
 | `freshness.updateTimeoutMs` | `number` | `120000` | Maximum wait duration in milliseconds for an incremental update. |
 | `command` | `string` | `'auto'` | MCP server executable or `'auto'` for automatic discovery. |
@@ -160,11 +158,11 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 
 ## DeepSeek Harness Compatibility
 
-`dsh-graphify` maintains strict compatibility with DeepSeek Harness releases:
+`dsh-graphify` declares explicit `peerDependencies` supported across DeepSeek Harness releases:
 
-- **Cordis Microkernel**: Compatible with `@deepseek-ai/cordis` `^4.0.1` and `4.0.2` (`>=4.0.0`).
-- **DSH Session & Core**: Fully compatible with `@deepseek-ai/dsh-session` `0.1.1-rc.2` through `0.1.5-alpha.2` and `0.1.2-rc.1`.
-- **Continuous Integration**: Tested via scheduled GitHub Actions workflows against upstream DSH master and latest Graphify releases.
+- **Cordis Microkernel**: Supports `@deepseek-ai/cordis` `>=4.0.0` (including `^4.0.1` and `4.0.2`).
+- **DSH Session & Core**: Supports `@deepseek-ai/dsh-session` `>=0.1.0` (including `0.1.1-rc.2` through `0.1.5-alpha.2`).
+- **DSH Commands**: Supports `@deepseek-ai/dsh-commands` `>=0.1.0`.
 - **Contract Drift Detection**: Automated schema drift tests (`pnpm run test:drift`) prevent breaking changes between Graphify MCP schemas and plugin definitions.
 
 ---
