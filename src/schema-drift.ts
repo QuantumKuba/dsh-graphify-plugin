@@ -26,12 +26,14 @@ export interface SchemaDriftReport {
   readonly summary: string
 }
 
-const PLUGIN_LOCAL_TOOLS = new Set([
+/** Plugin-local tool suffixes — these exist only in dsh-graphify and do not correspond to upstream Graphify MCP tools. */
+const PLUGIN_LOCAL_SUFFIXES = [
   'graphify_status',
   'graphify_capabilities',
   'graphify_call',
   'graphify_resource',
-])
+  'graphify_project_resource',
+] as const
 
 const CANONICAL_GRAPHIFY_TOOLS = [
   'query_graph',
@@ -49,16 +51,32 @@ const CANONICAL_GRAPHIFY_TOOLS = [
 /**
  * Resolves the canonical Graphify tool name from a potentially prefixed DSH tool name.
  * Returns null if the tool is a plugin-local utility that does not exist upstream.
+ *
+ * Handles arbitrary prefix lengths by checking whether the tool name, after stripping
+ * the prefix, matches a canonical upstream tool name or a plugin-local suffix.
  */
 export function getCanonicalGraphifyName(toolName: string): string | null {
-  if (PLUGIN_LOCAL_TOOLS.has(toolName)) return null
-  for (const local of PLUGIN_LOCAL_TOOLS) {
-    if (toolName.endsWith(`_${local}`)) return null
+  // Exact match against plugin-local suffixes (covers both unprefixed and
+  // prefix-coincidental matches like 'graphify_status' with prefix 'graphify_')
+  for (const local of PLUGIN_LOCAL_SUFFIXES) {
+    if (toolName === local) return null
   }
 
+  // Exact match against canonical upstream names
   for (const canonical of CANONICAL_GRAPHIFY_TOOLS) {
-    if (toolName === canonical || toolName.endsWith(`_${canonical}`)) {
+    if (toolName === canonical) return canonical
+  }
+
+  // The tool name has some prefix. Try stripping progressively to find a
+  // canonical or plugin-local match. We try all possible prefix lengths.
+  for (const canonical of CANONICAL_GRAPHIFY_TOOLS) {
+    if (toolName.endsWith(canonical) && toolName.length > canonical.length) {
       return canonical
+    }
+  }
+  for (const local of PLUGIN_LOCAL_SUFFIXES) {
+    if (toolName.endsWith(local) && toolName.length > local.length) {
+      return null
     }
   }
 
@@ -173,12 +191,33 @@ export function compareToolSchemas(
           })
         }
 
-        // Compare enums
+        // Compare enums with correct breaking/informational semantics:
+        // - native has enum, upstream removes values → breaking (restriction violation)
+        // - native has enum, upstream adds values → informational (extension)
+        // - native has no enum, upstream adds enum → breaking (new restriction)
+        // - native has enum, upstream removes enum → informational (widening)
         const nativeEnum = nativeProps[propName]?.enum
         const upstreamEnum = upstreamProps[propName]?.enum
-        if (Array.isArray(nativeEnum) || Array.isArray(upstreamEnum)) {
-          const nativeEnumSet = new Set(nativeEnum ?? [])
-          const upstreamEnumSet = new Set(upstreamEnum ?? [])
+
+        if (Array.isArray(nativeEnum) && !Array.isArray(upstreamEnum)) {
+          // Enum removed upstream: widening — informational
+          differences.push({
+            tool: name,
+            kind: 'enum_changed',
+            severity: 'informational',
+            detail: `Enum constraint removed from argument '${propName}' in tool '${name}' (values now unrestricted).`,
+          })
+        } else if (!Array.isArray(nativeEnum) && Array.isArray(upstreamEnum)) {
+          // Enum added upstream: new restriction — breaking
+          differences.push({
+            tool: name,
+            kind: 'enum_changed',
+            severity: 'breaking',
+            detail: `Enum constraint added to argument '${propName}' in tool '${name}' (restricted to: ${upstreamEnum.map(String).join(', ')}).`,
+          })
+        } else if (Array.isArray(nativeEnum) && Array.isArray(upstreamEnum)) {
+          const nativeEnumSet = new Set(nativeEnum)
+          const upstreamEnumSet = new Set(upstreamEnum)
 
           for (const val of nativeEnumSet) {
             if (!upstreamEnumSet.has(val)) {

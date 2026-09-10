@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { compareToolSchemas } from '../src/schema-drift.ts'
+import { compareToolSchemas, getCanonicalGraphifyName } from '../src/schema-drift.ts'
 import type { ToolDefinition, McpToolInfo } from '../src/types.ts'
 
 describe('Schema Drift Detection', () => {
@@ -267,5 +267,91 @@ describe('Schema Drift Detection', () => {
     assert.ok(diff)
     assert.equal(diff?.kind, 'argument_removed')
     assert.equal(diff?.severity, 'breaking')
+  })
+
+  it('canonicalizes arbitrary prefix variants (g, abc, kg_, graphify_) and excludes plugin-local tools', () => {
+    const prefixes = ['', 'graphify_', 'kg_', 'g', 'abc_']
+
+    for (const prefix of prefixes) {
+      // Upstream tools should resolve to their canonical names
+      assert.equal(getCanonicalGraphifyName(`${prefix}query_graph`), 'query_graph')
+      assert.equal(getCanonicalGraphifyName(`${prefix}get_node`), 'get_node')
+      assert.equal(getCanonicalGraphifyName(`${prefix}get_neighbors`), 'get_neighbors')
+      assert.equal(getCanonicalGraphifyName(`${prefix}get_community`), 'get_community')
+      assert.equal(getCanonicalGraphifyName(`${prefix}god_nodes`), 'god_nodes')
+      assert.equal(getCanonicalGraphifyName(`${prefix}graph_stats`), 'graph_stats')
+      assert.equal(getCanonicalGraphifyName(`${prefix}shortest_path`), 'shortest_path')
+      assert.equal(getCanonicalGraphifyName(`${prefix}list_prs`), 'list_prs')
+      assert.equal(getCanonicalGraphifyName(`${prefix}get_pr_impact`), 'get_pr_impact')
+      assert.equal(getCanonicalGraphifyName(`${prefix}triage_prs`), 'triage_prs')
+
+      // Plugin-local tools must return null (excluded from drift checks)
+      assert.equal(getCanonicalGraphifyName(`${prefix}graphify_status`), null)
+      assert.equal(getCanonicalGraphifyName(`${prefix}graphify_capabilities`), null)
+      assert.equal(getCanonicalGraphifyName(`${prefix}graphify_call`), null)
+      assert.equal(getCanonicalGraphifyName(`${prefix}graphify_resource`), null)
+      assert.equal(getCanonicalGraphifyName(`${prefix}graphify_project_resource`), null)
+    }
+  })
+
+  it('detects enum added upstream as breaking restriction and enum removed upstream as informational widening', () => {
+    // Case 1: Native has unconstrained string, upstream adds enum restriction -> breaking
+    const unconstrainedNative: ToolDefinition[] = [
+      {
+        name: 'query_graph',
+        description: 'Search',
+        parameters: {
+          type: 'object',
+          properties: {
+            strategy: { type: 'string' }, // unconstrained string
+          },
+        },
+        output: { schema: {}, render: () => [] },
+        execute: () => Promise.resolve({}),
+      },
+    ]
+    const upstreamWithEnumRestriction: McpToolInfo[] = [
+      {
+        name: 'query_graph',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            strategy: { type: 'string', enum: ['bfs', 'dfs'] },
+          },
+        },
+      },
+    ]
+
+    const reportBreaking = compareToolSchemas(unconstrainedNative, upstreamWithEnumRestriction)
+    assert.equal(reportBreaking.hasBreakingDrift, true)
+    const breakingDiff = reportBreaking.differences.find((d) => d.kind === 'enum_changed')
+    assert.ok(breakingDiff)
+    assert.equal(breakingDiff?.severity, 'breaking')
+    assert.match(breakingDiff?.detail || '', /Enum constraint added/)
+
+    // Case 2: Native has enum restriction, upstream removes enum -> informational widening
+    const reportWidening = compareToolSchemas(upstreamWithEnumRestriction.map((u) => ({
+      name: u.name,
+      description: '',
+      parameters: u.inputSchema as any,
+      output: { schema: {}, render: () => [] },
+      execute: () => Promise.resolve({}),
+    })), [
+      {
+        name: 'query_graph',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            strategy: { type: 'string' }, // enum removed upstream
+          },
+        },
+      },
+    ])
+
+    assert.equal(reportWidening.hasBreakingDrift, false)
+    const wideningDiff = reportWidening.differences.find((d) => d.kind === 'enum_changed')
+    assert.ok(wideningDiff)
+    assert.equal(wideningDiff?.severity, 'informational')
+    assert.match(wideningDiff?.detail || '', /Enum constraint removed/)
   })
 })
