@@ -117,4 +117,52 @@ describe('GraphifyMcpClient', () => {
       await client.dispose()
     }
   })
+
+  it('cleans up resources and throws when handshake fails', async () => {
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: ['-e', 'process.stderr.write("Fatal crash\\n"); process.exit(1);'],
+      cwd: fixtureDir,
+      timeoutMs: 2_000,
+      reconnect: { enabled: false },
+    })
+
+    try {
+      await assert.rejects(() => client.init(), /Failed to connect|Connection closed|Fatal crash/i)
+      assert.notEqual(client.getConnectionState(), 'connected')
+    } finally {
+      await client.dispose()
+    }
+  })
+
+  it('disposes cleanly during reconnect backoff without leaking timers', async () => {
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [serverPath],
+      cwd: fixtureDir,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 500,
+        maxDelayMs: 1000,
+        maxAttempts: 3,
+      },
+    })
+
+    try {
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // Trigger reconnect
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      assert.equal(client.getConnectionState(), 'reconnecting')
+
+      await client.dispose()
+      assert.equal(client.getConnectionState(), 'disposed')
+    } finally {
+      await client.dispose()
+    }
+  })
 })

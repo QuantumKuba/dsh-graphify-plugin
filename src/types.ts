@@ -111,32 +111,6 @@ export interface McpResource {
   mimeType?: string
 }
 
-/** MCP JSON-RPC 2.0 Request. */
-export interface JsonRpcRequest {
-  jsonrpc: '2.0'
-  id: number | string
-  method: string
-  params?: Record<string, unknown>
-}
-
-/** MCP JSON-RPC 2.0 Response. */
-export interface JsonRpcResponse {
-  jsonrpc: '2.0'
-  id: number | string
-  result?: unknown
-  error?: {
-    code: number
-    message: string
-    data?: unknown
-  }
-}
-
-/** MCP JSON-RPC 2.0 Notification. */
-export interface JsonRpcNotification {
-  jsonrpc: '2.0'
-  method: string
-  params?: Record<string, unknown>
-}
 
 /** Result returned by an MCP tools/call request. */
 export interface McpCallResult {
@@ -207,10 +181,11 @@ export interface GraphFreshnessInfo {
   readonly changedFilesCount?: number
   readonly changedFilesSample?: string[]
   readonly lastIndexedTime?: string
+  readonly strategy?: 'metadata' | 'git-heuristic' | 'filesystem-heuristic'
 }
 
 /** Overall operational status of Graphify for a project/session. */
-export type GraphifyOverallStatus = 'healthy' | 'stale' | 'missing' | 'unavailable' | 'error' | 'unknown'
+export type GraphifyOverallStatus = 'healthy' | 'stale' | 'missing' | 'unavailable' | 'error' | 'unprobed' | 'unknown'
 
 /** MCP connection states. */
 export type McpConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'disposed'

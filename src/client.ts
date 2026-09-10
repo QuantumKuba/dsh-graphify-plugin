@@ -144,8 +144,12 @@ export class GraphifyMcpClient {
       this.transport = null
     }
 
+    let transport: StdioClientTransport | null = null
+    let client: Client | null = null
+    let handshakeComplete = false
+
     try {
-      const transport = new StdioClientTransport({
+      transport = new StdioClientTransport({
         command: this.command,
         args: this.args,
         cwd: this.cwd,
@@ -165,9 +169,9 @@ export class GraphifyMcpClient {
         })
       }
 
-      // Handle unexpected close
+      // Handle unexpected close only after handshake is established
       transport.onclose = () => {
-        if (this.generation !== currentGeneration || this.isDisposed) return
+        if (this.generation !== currentGeneration || this.isDisposed || !handshakeComplete) return
         this.handleDisconnect(currentGeneration)
       }
 
@@ -177,7 +181,7 @@ export class GraphifyMcpClient {
         this.logger?.warn(`[dsh-graphify] Transport error (gen ${currentGeneration}): ${error.message}`)
       }
 
-      const client = new Client(
+      client = new Client(
         {
           name: 'dsh-graphify',
           version: getPackageVersion(),
@@ -214,6 +218,7 @@ export class GraphifyMcpClient {
         return
       }
 
+      handshakeComplete = true
       this.client = client
       this.transport = transport
       this.setState('connected')
@@ -225,6 +230,23 @@ export class GraphifyMcpClient {
         this.reconnectAttempts = 0
       }, this.reconnectConfig.maxDelayMs)
     } catch (error) {
+      if (client) {
+        try {
+          await client.close()
+        } catch {
+          // Ignore
+        }
+      }
+      if (transport) {
+        try {
+          await transport.close()
+        } catch {
+          // Ignore
+        }
+      }
+      this.client = null
+      this.transport = null
+
       if (this.generation !== currentGeneration || this.isDisposed) return
       this.setState('error')
       const msg = error instanceof Error ? error.message : String(error)
@@ -420,6 +442,7 @@ export class GraphifyMcpClient {
    */
   async dispose(): Promise<void> {
     this.isDisposed = true
+    this.generation++
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
