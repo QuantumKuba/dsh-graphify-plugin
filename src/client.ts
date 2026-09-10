@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import type {
   McpToolInfo,
   McpResource,
@@ -56,6 +57,7 @@ export class GraphifyMcpClient {
   private generation = 0
   private initPromise: Promise<void> | null = null
   private stderrBuffer: string[] = []
+  private stderrBufferBytes = 0
   private reconnectAttempts = 0
   private reconnectTimer: NodeJS.Timeout | null = null
   private healthyTimer: NodeJS.Timeout | null = null
@@ -127,6 +129,9 @@ export class GraphifyMcpClient {
    *
    * This is the public entry point for explicit first-time connection. On failure, it throws
    * to the caller without scheduling automatic retries. Use for initial handshakes only.
+   *
+   * When called during an active reconnect backoff, expedites the next attempt within the
+   * existing state machine rather than starting a parallel connection that would kill recovery.
    */
   async init(): Promise<void> {
     if (this.isDisposed) {
@@ -137,6 +142,12 @@ export class GraphifyMcpClient {
     }
     if (this.initPromise) {
       return this.initPromise
+    }
+
+    // If reconnecting, expedite the next attempt within the existing state machine
+    // rather than starting a parallel connection that would cancel the recovery chain.
+    if (this.state === 'reconnecting' && this.reconnectConfig.enabled) {
+      return this.awaitReconnect()
     }
 
     this.initPromise = this.establishConnection()
@@ -150,6 +161,33 @@ export class GraphifyMcpClient {
     } finally {
       this.initPromise = null
     }
+  }
+
+  /**
+   * Joins an in-progress reconnect lifecycle: cancels the backoff timer to expedite the
+   * next attempt, then waits for the state machine to reach `connected` or a terminal state.
+   */
+  private awaitReconnect(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      // Cancel the pending backoff timer so the next attempt fires immediately
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer)
+        this.reconnectTimer = null
+        // Fire the attempt immediately within the existing state machine
+        this.reconnectAttempt(this.generation)
+      }
+
+      const cleanup = this.onConnectionStateChange((state) => {
+        if (state === 'connected') {
+          cleanup()
+          resolve()
+        } else if (state === 'error' || state === 'disposed') {
+          cleanup()
+          reject(new Error(`Reconnect ended with state: ${state}`))
+        }
+        // 'reconnecting' is intermediate — keep waiting
+      })
+    })
   }
 
   private async establishConnection(): Promise<void> {
@@ -193,8 +231,12 @@ export class GraphifyMcpClient {
         stderrStream.on('data', (chunk: Buffer | string) => {
           const text = chunk.toString()
           this.stderrBuffer.push(text)
-          if (this.stderrBuffer.length > 50) {
-            this.stderrBuffer.shift()
+          this.stderrBufferBytes += text.length
+          // Enforce 50-line and 64 KB aggregate limits
+          while (this.stderrBuffer.length > 50 || this.stderrBufferBytes > 65536) {
+            const dropped = this.stderrBuffer.shift()
+            if (dropped) this.stderrBufferBytes -= dropped.length
+            else break
           }
         })
       }
@@ -234,6 +276,23 @@ export class GraphifyMcpClient {
       this.transport = transport
       this.setState('connected')
       this.logger?.info(`[dsh-graphify] Connected to Graphify MCP server in ${this.cwd}`)
+
+      // Subscribe to server-initiated tool list changes via the MCP SDK notification protocol
+      client.setNotificationHandler(
+        ToolListChangedNotificationSchema,
+        async () => {
+          if (this.generation !== currentGeneration || this.isDisposed) return
+          if (this.toolsChangedListeners.size === 0) return
+          try {
+            const tools = await this.listTools()
+            for (const listener of this.toolsChangedListeners) {
+              try { listener(tools) } catch { /* ignore listener errors */ }
+            }
+          } catch {
+            // Notification-driven refresh failures are non-fatal
+          }
+        }
+      )
 
       // Reset reconnect counter once connection remains stable
       if (this.healthyTimer) clearTimeout(this.healthyTimer)

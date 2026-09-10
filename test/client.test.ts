@@ -139,9 +139,11 @@ describe('GraphifyMcpClient', () => {
   })
 
   it('cleans up resources and throws when handshake fails', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-handshake-fail-'))
+    const pidFile = path.join(tempDir, 'child.pid')
     const client = new GraphifyMcpClient({
       command: process.execPath,
-      args: ['-e', 'process.stderr.write("Fatal crash\\n"); process.exit(1);'],
+      args: ['-e', `import('node:fs').then(fs => { fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.stderr.write("Fatal crash\\n"); process.exit(1); })`],
       cwd: fixtureDir,
       timeoutMs: 2_000,
       reconnect: { enabled: false },
@@ -151,11 +153,25 @@ describe('GraphifyMcpClient', () => {
       await assert.rejects(() => client.init(), /Failed to connect|Connection closed|Fatal crash/i)
       assert.notEqual(client.getConnectionState(), 'connected')
       // Ensure internal references are torn down
-      const internals = client as unknown as { client: unknown; transport: unknown }
+      const internals = client as unknown as { client: unknown; transport: unknown; reconnectTimer: unknown }
       assert.equal(internals.client, null)
       assert.equal(internals.transport, null)
+      assert.equal(internals.reconnectTimer, null)
+
+      // Verify child process is dead
+      assert.ok(fs.existsSync(pidFile), 'Child should have written PID before exiting')
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+      assert.ok(pid > 0)
+      let isAlive = true
+      try {
+        process.kill(pid, 0)
+      } catch (err: unknown) {
+        if ((err as { code?: string }).code === 'ESRCH') isAlive = false
+      }
+      assert.equal(isAlive, false, 'Child process must be dead after handshake failure')
     } finally {
       await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
 
@@ -387,6 +403,111 @@ describe('GraphifyMcpClient', () => {
         attemptsAfterWait = parseInt(fs.readFileSync(attemptFile, 'utf8').trim(), 10) || 0
       }
       assert.ok(attemptsAfterWait <= attemptsAtDispose + 1)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers and executes tool calls made during reconnect backoff', async () => {
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [serverPath],
+      cwd: fixtureDir,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 200,
+        maxDelayMs: 500,
+        maxAttempts: 5,
+      },
+    })
+
+    try {
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // Break connection to enter reconnecting backoff
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      // Wait until client transitions to reconnecting
+      await waitForState(client, 'reconnecting', 2000)
+      assert.equal(client.getConnectionState(), 'reconnecting')
+
+      // While reconnecting, call a tool. This invokes init() -> awaitReconnect()
+      // which expedites reconnection and completes the tool call.
+      const result = await client.callTool('query_graph', { question: 'hello' })
+      assert.ok(result.content?.[0]?.text?.includes('query_graph'))
+      assert.equal(client.getConnectionState(), 'connected')
+    } finally {
+      await client.dispose()
+    }
+  })
+
+  it('fires onToolsChanged listener when server sends tools/list_changed notification', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-tools-notify-'))
+    const notifyServerScript = path.join(tempDir, 'notify-server.mjs')
+    fs.writeFileSync(
+      notifyServerScript,
+      `
+import readline from 'node:readline'
+let tools = [{ name: 'tool_v1', inputSchema: { type: 'object' } }]
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const req = JSON.parse(line)
+  if (req.method === 'notifications/initialized' || req.method === 'notifications/cancelled') return
+  if (req.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'test', version: '1.0' } } })
+    return
+  }
+  if (req.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: req.id, result: { tools } })
+    return
+  }
+  if (req.method === 'tools/call') {
+    tools.push({ name: 'tool_v2', inputSchema: { type: 'object' } })
+    send({ jsonrpc: '2.0', id: req.id, result: { content: [{ type: 'text', text: 'ok' }] } })
+    send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+    return
+  }
+})
+      `.trim()
+    )
+
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [notifyServerScript],
+      cwd: fixtureDir,
+      timeoutMs: 3000,
+    })
+
+    try {
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      let notifiedTools: any[] | null = null
+      const unsubscribe = client.onToolsChanged((tools) => {
+        notifiedTools = tools
+      })
+
+      // Initial tools list
+      const initialTools = await client.listTools()
+      assert.equal(initialTools.length, 1)
+      assert.equal(initialTools[0].name, 'tool_v1')
+
+      // Trigger the tool call that causes the server to emit notifications/tools/list_changed
+      await client.callTool('trigger', {})
+
+      // Wait briefly for notification dispatch
+      for (let i = 0; i < 20 && !notifiedTools; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+
+      assert.ok(notifiedTools, 'Listener should have been invoked with updated tools')
+      assert.equal(notifiedTools.length, 2)
+      assert.ok(notifiedTools.some((t: any) => t.name === 'tool_v2'))
+
+      unsubscribe()
     } finally {
       await client.dispose()
       fs.rmSync(tempDir, { recursive: true, force: true })
