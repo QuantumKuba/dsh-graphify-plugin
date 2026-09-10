@@ -121,6 +121,39 @@ function findInstalledGraphifyPython(): string | undefined {
   return undefined
 }
 
+/**
+ * Inspects and returns diagnostic information regarding the resolved Graphify runtime.
+ */
+export function getRuntimeInfo(config: Config): {
+  command: string
+  source: 'installed' | 'python' | 'uv' | 'custom' | 'unknown'
+  version?: string
+} {
+  if (config.command !== 'auto') {
+    return { command: config.command, source: 'custom' }
+  }
+
+  const installedMcp = findCommand('graphify-mcp')
+  if (installedMcp) {
+    return { command: installedMcp, source: 'installed' }
+  }
+
+  const installedPython = findInstalledGraphifyPython()
+  if (installedPython) {
+    return { command: installedPython, source: 'python' }
+  }
+
+  if (isCommandAvailable('uv')) {
+    return {
+      command: 'uv',
+      source: 'uv',
+      version: config.graphifyVersion,
+    }
+  }
+
+  return { command: 'auto', source: 'unknown' }
+}
+
 function isCommandAvailable(cmd: string): boolean {
   return findCommand(cmd) !== undefined
 }
@@ -128,10 +161,25 @@ function isCommandAvailable(cmd: string): boolean {
 function findCommand(cmd: string): string | undefined {
   try {
     const paths = (process.env.PATH || '').split(path.delimiter)
+    const extensions = process.platform === 'win32'
+      ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
+      : ['']
+
     for (const p of paths) {
-      const full = path.join(p, cmd)
-      if (fs.existsSync(full)) {
-        return full
+      if (!p) continue
+      for (const ext of extensions) {
+        const full = path.join(p, `${cmd}${ext.toLowerCase()}`)
+        if (fs.existsSync(full)) {
+          try {
+            const stat = fs.statSync(full)
+            if (stat.isFile()) return full
+          } catch {
+            // Ignore stat errors
+          }
+        }
+        if (ext && fs.existsSync(path.join(p, `${cmd}${ext.toUpperCase()}`))) {
+          return path.join(p, `${cmd}${ext.toUpperCase()}`)
+        }
       }
     }
   } catch {

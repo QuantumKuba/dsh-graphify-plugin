@@ -1,6 +1,6 @@
 {
   "name": "dsh-graphify",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Native Graphify knowledge graph plugin for DeepSeek Harness (DSH)",
   "keywords": [
     "deepseek",
@@ -65,11 +65,13 @@
     "build": "tsc && tsdown",
     "test": "node --import tsx --test test/*.test.ts",
     "test:e2e": "node --import tsx --test test/graphify-e2e.test.ts",
+    "test:drift": "node --import tsx --test test/schema-drift.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm run clean && pnpm run build && pnpm test"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0",

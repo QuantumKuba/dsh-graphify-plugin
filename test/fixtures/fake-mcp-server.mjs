@@ -16,7 +16,15 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   const request = JSON.parse(line)
   if (request.method === 'notifications/initialized' || request.method === 'notifications/cancelled') return
   if (request.method === 'initialize') {
-    send({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: {} } })
+    send({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        protocolVersion: '2024-11-05',
+        capabilities: { tools: {}, resources: {} },
+        serverInfo: { name: 'graphify-mcp', version: '0.9.57' },
+      },
+    })
     return
   }
   if (request.method === 'tools/list') {
