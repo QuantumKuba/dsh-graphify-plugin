@@ -59,6 +59,44 @@ export interface Config {
   toolPrefix: string
 
   /**
+   * Tool surface mode.
+   * - 'full': Registers the complete Graphify tool surface (all 10 native tools, doctor, and escape hatches).
+   * - 'compact': Registers a focused 6-tool surface tailored for smaller local models (20B-30B class).
+   * Defaults to 'full'.
+   */
+  toolMode: 'compact' | 'full'
+
+  /**
+   * Freshness monitoring and auto-update configuration.
+   */
+  freshness: {
+    /**
+     * Freshness evaluation mode:
+     * - 'off': Never check or warn about freshness.
+     * - 'warn': Warn when the graph is likely stale without rebuilding.
+     * - 'auto': Automatically trigger incremental graph updates before queries when stale.
+     * Defaults to 'warn'.
+     */
+    mode: 'off' | 'warn' | 'auto'
+    /** Maximum duration in milliseconds to await an incremental graph update. */
+    updateTimeoutMs: number
+  }
+
+  /**
+   * Connection resilience and reconnection policy for Graphify MCP subprocess.
+   */
+  reconnect: {
+    /** Enable automatic reconnection after lost connection (default true). */
+    enabled: boolean
+    /** Initial reconnect delay in milliseconds (default 500). */
+    initialDelayMs: number
+    /** Maximum delay between reconnect attempts in milliseconds (default 30000). */
+    maxDelayMs: number
+    /** Maximum consecutive reconnect attempts before giving up (default 10). */
+    maxAttempts: number
+  }
+
+  /**
    * Working directory for the Graphify subprocess.
    * Defaults to the active project root or process.cwd().
    */
@@ -76,5 +114,16 @@ export const Config: Schema<Config> = Schema.object({
   enablePromptSection: Schema.boolean().default(true).description('Register system prompt guidance for Graphify tools'),
   timeoutMs: Schema.number().default(60000).description('Per-tool-call timeout in milliseconds'),
   toolPrefix: Schema.string().default('').description('Optional prefix for registered tool names'),
+  toolMode: Schema.union(['compact', 'full']).default('full').description('Tool surface mode: compact for local models, full for complete suite'),
+  freshness: Schema.object({
+    mode: Schema.union(['off', 'warn', 'auto']).default('warn').description('Graph freshness mode (off, warn, auto)'),
+    updateTimeoutMs: Schema.number().default(120000).description('Max wait time for incremental graph update'),
+  }).default({ mode: 'warn', updateTimeoutMs: 120000 }).description('Graph freshness monitoring and auto-update options'),
+  reconnect: Schema.object({
+    enabled: Schema.boolean().default(true).description('Enable automatic reconnection on unexpected exit'),
+    initialDelayMs: Schema.number().default(500).description('Initial reconnect backoff delay in milliseconds'),
+    maxDelayMs: Schema.number().default(30000).description('Maximum reconnect delay in milliseconds'),
+    maxAttempts: Schema.number().default(10).description('Maximum consecutive reconnect attempts'),
+  }).default({ enabled: true, initialDelayMs: 500, maxDelayMs: 30000, maxAttempts: 10 }).description('Connection resilience options'),
   cwd: Schema.string().description('Explicit working directory for Graphify subprocess'),
 })
