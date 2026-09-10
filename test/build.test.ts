@@ -42,7 +42,7 @@ describe('Built Library Distribution', () => {
     })
 
     try {
-      assert.equal(registeredTools.size, 13)
+      assert.equal(registeredTools.size, 14)
       assert.ok(registeredSections.has('graphify:guidance'))
 
       const statsTool = registeredTools.get('graph_stats')!
