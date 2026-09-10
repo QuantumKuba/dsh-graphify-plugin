@@ -63,12 +63,12 @@ export function createGraphifyPromptSection(
         '4. **Trivial tasks**: For simple single-file edits or obvious locations, use direct filesystem tools rather than Graphify.'
       )
 
-      if (detectedGraph?.reportPath) {
-        lines.push(`\n- Graph report: \`${detectedGraph.reportPath}\``)
-      }
-      if (detectedGraph?.wikiIndexPath) {
-        lines.push(`- Architecture wiki: \`${detectedGraph.wikiIndexPath}\``)
-      }
+      lines.push(
+        '',
+        '### Session Reports & Diagnostics',
+        `- Use \`${statusTool}\` to inspect graph status, report locations, and freshness for the active workspace.`,
+        `- When available in the workspace, refer to \`graphify-out/GRAPH_REPORT.md\` and \`graphify-out/wiki/index.md\` for structural overviews.`
+      )
 
       return lines.join('\n')
     },

@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import path from 'node:path'
 import type { Config } from './config.ts'
 import type {
   ResolvedProject,
@@ -11,18 +10,35 @@ import type { GraphifyMcpClient } from './client.ts'
 import { checkGraphFreshness } from './freshness.ts'
 import { getRuntimeInfo } from './server-process.ts'
 
+export interface CollectStatusOptions {
+  /** If true, proactively probes the MCP connection if disconnected (default false). */
+  readonly probe?: boolean
+}
+
 /**
  * Collects a comprehensive status report for Graphify in the given project/session.
  * Non-destructive and fault-tolerant: failure of any individual metric does not fail
  * the entire diagnostic response.
  */
-export function collectGraphifyStatus(
+export async function collectGraphifyStatus(
   project: ResolvedProject,
   client: GraphifyMcpClient,
-  config: Config
-): GraphifyStatusResult {
+  config: Config,
+  options?: CollectStatusOptions
+): Promise<GraphifyStatusResult> {
   const runtime = getRuntimeInfo(config)
-  const mcpState = client.getConnectionState()
+  let mcpState = client.getConnectionState()
+
+  // Proactively probe MCP connectivity if requested and currently disconnected
+  if (options?.probe && mcpState === 'disconnected') {
+    try {
+      await client.init()
+      mcpState = client.getConnectionState()
+    } catch {
+      mcpState = client.getConnectionState()
+    }
+  }
+
   const recentStderr = client.getRecentStderr()
   const freshness = checkGraphFreshness(project)
 
@@ -100,19 +116,27 @@ export function collectGraphifyStatus(
     // Git not available or not a git repository
   }
 
-  // 3. Compute overall status
+  // 3. Compute overall status with strict semantic guarantees
   let overall: GraphifyOverallStatus = 'unknown'
 
   if (mcpState === 'error') {
     overall = 'error'
   } else if (!project.hasGraph) {
     overall = 'missing'
-  } else if (runtime.source === 'unknown' && mcpState !== 'connected') {
+  } else if (runtime.source === 'unknown') {
     overall = 'unavailable'
-  } else if (freshness.state === 'stale') {
-    overall = 'stale'
-  } else if (project.hasGraph && (mcpState === 'connected' || mcpState === 'disconnected')) {
-    overall = 'healthy'
+  } else if (mcpState === 'disconnected') {
+    overall = 'unprobed'
+  } else if (mcpState === 'connecting' || mcpState === 'reconnecting') {
+    overall = 'unavailable'
+  } else if (mcpState === 'connected') {
+    if (freshness.state === 'stale') {
+      overall = 'stale'
+    } else if (freshness.state === 'fresh') {
+      overall = 'healthy'
+    } else {
+      overall = 'unknown'
+    }
   }
 
   return {
@@ -160,6 +184,10 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
 
   lines.push(`• Graph Freshness: ${status.freshness.state.toUpperCase()}${status.freshness.reason ? ` - ${status.freshness.reason}` : ''}`)
 
+  if (status.freshness.strategy) {
+    lines.push(`  Inspection Strategy: ${status.freshness.strategy}`)
+  }
+
   if (status.freshness.changedFilesSample && status.freshness.changedFilesSample.length > 0) {
     lines.push(`  Changed files: ${status.freshness.changedFilesSample.join(', ')}${(status.freshness.changedFilesCount ?? 0) > 5 ? ' ...' : ''}`)
   }
@@ -180,16 +208,22 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
     }
   }
 
-  // Actionable advice
+  // Actionable advice strictly matching semantic health state
   lines.push('')
-  if (status.overall === 'missing') {
-    lines.push('Recommendation: Run `/graphify` or `graphify .` in the project root to generate the knowledge graph.')
+  if (status.overall === 'healthy') {
+    lines.push('Graph is verified, connected, and ready for architectural and dependency queries.')
   } else if (status.overall === 'stale') {
-    lines.push('Recommendation: Run `/graphify update` or `graphify update .` to sync recent code modifications into the graph.')
-  } else if (status.overall === 'error' || status.overall === 'unavailable') {
-    lines.push('Recommendation: Verify Graphify installation with `uv tool install "graphifyy[mcp]"` or configure `command` in cordis.yml.')
+    lines.push('Recommendation: Graph is stale. Run `/graphify update` or `graphify update .` to sync recent code modifications into the graph.')
+  } else if (status.overall === 'missing') {
+    lines.push('Recommendation: Graph is missing. Run `/graphify` or `graphify .` in the project root to generate the knowledge graph.')
+  } else if (status.overall === 'unprobed') {
+    lines.push('Recommendation: MCP server has not been probed yet. Execute a query tool or probe connectivity to verify health.')
+  } else if (status.overall === 'error') {
+    lines.push('Recommendation: Graphify MCP server encountered an error. Check diagnostics above or verify Python/uv environment.')
+  } else if (status.overall === 'unavailable') {
+    lines.push('Recommendation: Graphify runtime is unavailable. Verify installation with `uv tool install "graphifyy[mcp]"` or configure `command` in cordis.yml.')
   } else {
-    lines.push('Graph is usable and ready for architectural and dependency queries.')
+    lines.push('Recommendation: Graph state is unknown. Inspect graphify-out/ and run `/graphify` if needed.')
   }
 
   return lines.join('\n')

@@ -26,10 +26,51 @@ export interface SchemaDriftReport {
   readonly summary: string
 }
 
+const PLUGIN_LOCAL_TOOLS = new Set([
+  'graphify_status',
+  'graphify_capabilities',
+  'graphify_call',
+  'graphify_resource',
+])
+
+const CANONICAL_GRAPHIFY_TOOLS = [
+  'query_graph',
+  'get_node',
+  'get_neighbors',
+  'get_community',
+  'god_nodes',
+  'graph_stats',
+  'shortest_path',
+  'list_prs',
+  'get_pr_impact',
+  'triage_prs',
+] as const
+
+/**
+ * Resolves the canonical Graphify tool name from a potentially prefixed DSH tool name.
+ * Returns null if the tool is a plugin-local utility that does not exist upstream.
+ */
+export function getCanonicalGraphifyName(toolName: string): string | null {
+  if (PLUGIN_LOCAL_TOOLS.has(toolName)) return null
+  for (const local of PLUGIN_LOCAL_TOOLS) {
+    if (toolName.endsWith(`_${local}`)) return null
+  }
+
+  for (const canonical of CANONICAL_GRAPHIFY_TOOLS) {
+    if (toolName === canonical || toolName.endsWith(`_${canonical}`)) {
+      return canonical
+    }
+  }
+
+  return toolName
+}
+
 /**
  * Compares known native Graphify tool schemas against the upstream tools/list result.
  * Distinguishes between informational additions (new optional tools or parameters) and
  * breaking drift affecting native first-class tool contracts.
+ *
+ * Normalizes tool prefixes before comparing so configured prefixes do not cause false drifts.
  */
 export function compareToolSchemas(
   nativeTools: readonly ToolDefinition[],
@@ -37,18 +78,11 @@ export function compareToolSchemas(
 ): SchemaDriftReport {
   const differences: SchemaDifference[] = []
 
-  // Filter out plugin-owned local extension tools that don't exist upstream
-  const pluginLocalTools = new Set([
-    'graphify_status',
-    'graphify_capabilities',
-    'graphify_call',
-    'graphify_resource',
-  ])
-
   const nativeMap = new Map<string, ToolDefinition>()
   for (const tool of nativeTools) {
-    if (!pluginLocalTools.has(tool.name)) {
-      nativeMap.set(tool.name, tool)
+    const canonical = getCanonicalGraphifyName(tool.name)
+    if (canonical) {
+      nativeMap.set(canonical, tool)
     }
   }
 
@@ -138,14 +172,41 @@ export function compareToolSchemas(
             detail: `Argument '${propName}' in '${name}' changed type from '${String(nativeType)}' to '${String(upstreamType)}'.`,
           })
         }
+
+        // Compare enums
+        const nativeEnum = nativeProps[propName]?.enum
+        const upstreamEnum = upstreamProps[propName]?.enum
+        if (Array.isArray(nativeEnum) || Array.isArray(upstreamEnum)) {
+          const nativeEnumSet = new Set(nativeEnum ?? [])
+          const upstreamEnumSet = new Set(upstreamEnum ?? [])
+
+          for (const val of nativeEnumSet) {
+            if (!upstreamEnumSet.has(val)) {
+              differences.push({
+                tool: name,
+                kind: 'enum_changed',
+                severity: 'breaking',
+                detail: `Enum value '${String(val)}' in argument '${propName}' for tool '${name}' is no longer supported upstream.`,
+              })
+            }
+          }
+          for (const val of upstreamEnumSet) {
+            if (!nativeEnumSet.has(val)) {
+              differences.push({
+                tool: name,
+                kind: 'enum_changed',
+                severity: 'informational',
+                detail: `New upstream enum value '${String(val)}' added to argument '${propName}' for tool '${name}'.`,
+              })
+            }
+          }
+        }
       }
     }
 
+    // Check removed properties - do NOT ignore project_path
     for (const propName of Object.keys(nativeProps)) {
       if (!(propName in upstreamProps)) {
-        // Ignore plugin's internal parameter injection (project_path) if upstream handles it via cwd/session
-        if (propName === 'project_path') continue
-
         differences.push({
           tool: name,
           kind: 'argument_removed',

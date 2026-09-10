@@ -58,11 +58,23 @@ describe('Compact Tool Mode and Dynamic Prefixing', () => {
   })
 
   it('handles toolPrefix consistently without double-prefixing', () => {
+    // Empty prefix
+    assert.equal(getPrefixedToolName('query_graph', ''), 'query_graph')
+    assert.equal(getPrefixedToolName('graphify_status', ''), 'graphify_status')
+
+    // Standard plugin prefix
     assert.equal(getPrefixedToolName('query_graph', 'graphify_'), 'graphify_query_graph')
     assert.equal(getPrefixedToolName('graphify_status', 'graphify_'), 'graphify_status')
     assert.equal(getPrefixedToolName('graphify_resource', 'graphify_'), 'graphify_resource')
+
+    // Custom multi-character prefix
     assert.equal(getPrefixedToolName('query_graph', 'kg_'), 'kg_query_graph')
     assert.equal(getPrefixedToolName('graphify_status', 'kg_'), 'kg_graphify_status')
+
+    // Arbitrary single-letter prefix
+    assert.equal(getPrefixedToolName('query_graph', 'g'), 'gquery_graph')
+    assert.equal(getPrefixedToolName('get_node', 'g'), 'gget_node')
+    assert.equal(getPrefixedToolName('graphify_status', 'g'), 'ggraphify_status')
 
     const config = Config({
       toolPrefix: 'graphify_',

@@ -37,15 +37,25 @@ function renderOutput(_args: unknown, value: unknown): ContentBlock[] {
   return [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }]
 }
 
+const PLUGIN_OWNED_TOOLS = new Set([
+  'graphify_status',
+  'graphify_capabilities',
+  'graphify_call',
+  'graphify_resource',
+])
+
 /**
- * Resolves the prefixed tool name consistently, preventing double-prefixing.
+ * Resolves the prefixed tool name consistently without accidental prefix collisions.
  * e.g. prefix 'graphify_' + 'query_graph' -> 'graphify_query_graph'
- *      prefix 'graphify_' + 'graphify_status' -> 'graphify_status'
- *      prefix '' + 'graphify_status' -> 'graphify_status'
+ *      prefix 'graphify_' + 'graphify_status' -> 'graphify_status' (preserved)
+ *      prefix 'g' + 'get_node' -> 'gget_node' (never mistakenly stripped)
+ *      prefix '' + 'query_graph' -> 'query_graph'
  */
 export function getPrefixedToolName(baseName: string, prefix: string): string {
   if (!prefix) return baseName
-  if (baseName.startsWith(prefix)) return baseName
+  if (prefix === 'graphify_' && PLUGIN_OWNED_TOOLS.has(baseName)) {
+    return baseName
+  }
   return `${prefix}${baseName}`
 }
 
@@ -69,7 +79,7 @@ export function createGraphifyToolDefinitions(
     isQueryTool = false
   ): Promise<GraphifyToolOutput> {
     const args = { ...rawArgs }
-    const project = resolver.resolve({
+    let project = resolver.resolve({
       explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
       toolContext: execution,
     })
@@ -94,6 +104,18 @@ export function createGraphifyToolDefinitions(
           const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal)
           if (updateRes.success) {
             resolver.invalidate(project.projectRoot)
+            // Re-resolve project and refresh metadata after update
+            project = resolver.resolve({
+              explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
+              toolContext: execution,
+            })
+            if (!args.project_path) {
+              args.project_path = project.projectRoot
+            }
+            const postFreshness = checkGraphFreshness(project)
+            if (postFreshness.state === 'stale') {
+              stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
+            }
           } else {
             stalenessNotice = `[Notice: Auto-update failed (${updateRes.error || updateRes.stderr.trim()}). Using current graph.]\n\n`
           }
@@ -200,28 +222,63 @@ export function createGraphifyToolDefinitions(
     // 5. graphify_status (First-class doctor / health tool)
     {
       name: getPrefixedToolName('graphify_status', prefix),
-      description: 'Inspect Graphify health, graph existence, freshness, node/edge counts, git synchronization, and MCP connectivity for this workspace.',
+      description:
+        'Inspect Graphify health, graph existence, freshness, node/edge counts, git synchronization, and MCP connectivity for this workspace.',
       parameters: {
         type: 'object',
         properties: {
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to current session workspace.' },
+          project_path: {
+            type: 'string',
+            description: 'Absolute path to project directory. Defaults to current session workspace.',
+          },
+          probe: {
+            type: 'boolean',
+            description: 'Whether to actively probe the MCP server connection if currently disconnected. Defaults to true.',
+          },
         },
       },
-      output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
+      output: {
+        schema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Formatted diagnostic status report' },
+            overall: {
+              type: 'string',
+              enum: ['healthy', 'stale', 'missing', 'unavailable', 'error', 'unprobed', 'unknown'],
+              description: 'Overall operational health status',
+            },
+            projectRoot: { type: 'string' },
+            graphPath: { type: 'string' },
+            graphExists: { type: 'boolean' },
+            freshness: { type: 'object' },
+            mcpState: { type: 'string' },
+            isError: { type: 'boolean' },
+          },
+          required: ['text', 'overall', 'projectRoot', 'graphExists'],
+        },
+        render: renderOutput,
+      },
       timeoutMs: config.timeoutMs,
-      execute: (_args, exec) => {
+      execute: async (_args, exec) => {
         const rawArgs = (_args as Record<string, unknown>) || {}
         const project = resolver.resolve({
           explicitPath: typeof rawArgs.project_path === 'string' ? rawArgs.project_path : undefined,
           toolContext: exec,
         })
-        const status = collectGraphifyStatus(project, client, config)
+        const shouldProbe = rawArgs.probe !== false
+        const status = await collectGraphifyStatus(project, client, config, { probe: shouldProbe })
         const text = formatGraphifyStatus(status)
-        return Promise.resolve({
+        return {
           text,
+          overall: status.overall,
+          projectRoot: status.projectRoot,
+          graphPath: status.graphPath ?? undefined,
+          graphExists: status.graphExists,
+          freshness: status.freshness,
+          mcpState: status.mcp.state,
           isError: status.overall === 'error',
           meta: status,
-        } satisfies GraphifyToolOutput)
+        }
       },
     },
 

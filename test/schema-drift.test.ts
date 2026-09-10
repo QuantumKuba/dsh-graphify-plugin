@@ -146,4 +146,126 @@ describe('Schema Drift Detection', () => {
     assert.equal(report.hasBreakingDrift, true)
     assert.ok(report.differences.some((d) => d.kind === 'type_changed' && d.severity === 'breaking'))
   })
+
+  it('correctly maps prefixed native tools to upstream without false drift', () => {
+    const prefixedNativeTools: ToolDefinition[] = baseNativeTools.map((tool) => ({
+      ...tool,
+      name: `graphify_${tool.name}`,
+    }))
+
+    const upstream: McpToolInfo[] = [
+      {
+        name: 'query_graph',
+        inputSchema: {
+          type: 'object',
+          properties: { question: { type: 'string' }, depth: { type: 'integer' } },
+          required: ['question'],
+        },
+      },
+      {
+        name: 'get_node',
+        inputSchema: {
+          type: 'object',
+          properties: { label: { type: 'string' } },
+          required: ['label'],
+        },
+      },
+    ]
+
+    const report = compareToolSchemas(prefixedNativeTools, upstream)
+    assert.equal(report.hasBreakingDrift, false)
+    assert.equal(report.breakingCount, 0)
+  })
+
+  it('detects breaking and informational enum changes', () => {
+    const nativeToolsWithEnum: ToolDefinition[] = [
+      {
+        name: 'query_graph',
+        description: 'Search graph',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['ast', 'semantic', 'hybrid'] },
+          },
+        },
+        output: { schema: {}, render: () => [] },
+        execute: () => Promise.resolve({}),
+      },
+    ]
+
+    // Upstream dropped 'hybrid' (breaking change for callers relying on hybrid)
+    const upstreamDroppedEnum: McpToolInfo[] = [
+      {
+        name: 'query_graph',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['ast', 'semantic'] },
+          },
+        },
+      },
+    ]
+
+    const breakingReport = compareToolSchemas(nativeToolsWithEnum, upstreamDroppedEnum)
+    assert.equal(breakingReport.hasBreakingDrift, true)
+    const breakingDiff = breakingReport.differences.find((d) => d.kind === 'enum_changed')
+    assert.ok(breakingDiff)
+    assert.equal(breakingDiff?.severity, 'breaking')
+
+    // Upstream added 'neural' (informational extension)
+    const upstreamAddedEnum: McpToolInfo[] = [
+      {
+        name: 'query_graph',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['ast', 'semantic', 'hybrid', 'neural'] },
+          },
+        },
+      },
+    ]
+
+    const infoReport = compareToolSchemas(nativeToolsWithEnum, upstreamAddedEnum)
+    assert.equal(infoReport.hasBreakingDrift, false)
+    const infoDiff = infoReport.differences.find((d) => d.kind === 'enum_changed')
+    assert.ok(infoDiff)
+    assert.equal(infoDiff?.severity, 'informational')
+  })
+
+  it('flags project_path removal as breaking drift', () => {
+    const nativeWithProjectPath: ToolDefinition[] = [
+      {
+        name: 'query_graph',
+        description: 'Search graph',
+        parameters: {
+          type: 'object',
+          properties: {
+            question: { type: 'string' },
+            project_path: { type: 'string' },
+          },
+        },
+        output: { schema: {}, render: () => [] },
+        execute: () => Promise.resolve({}),
+      },
+    ]
+
+    const upstreamWithoutProjectPath: McpToolInfo[] = [
+      {
+        name: 'query_graph',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            question: { type: 'string' },
+          },
+        },
+      },
+    ]
+
+    const report = compareToolSchemas(nativeWithProjectPath, upstreamWithoutProjectPath)
+    assert.equal(report.hasBreakingDrift, true)
+    const diff = report.differences.find((d) => d.detail.includes('project_path'))
+    assert.ok(diff)
+    assert.equal(diff?.kind, 'argument_removed')
+    assert.equal(diff?.severity, 'breaking')
+  })
 })
