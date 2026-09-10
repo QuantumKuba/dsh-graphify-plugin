@@ -70,15 +70,15 @@ Registers the 6 essential tools that handle 95% of agent code navigation:
 | `query_graph` | BFS/DFS traversal over the knowledge graph around an entry node or query. |
 | `get_node` | Deep inspection of a specific symbol (AST type, file location, docstring, community). |
 | `get_neighbors` | Inspection of direct dependencies and dependents connected to a node. |
-| `god_nodes` | Identification of central architectural hubs and high-degree modules. |
 | `shortest_path` | Exploration of dependency connection chains between two symbols. |
+| `graphify_resource` | Direct access to Graphify report, stats, and audit markdown resources. |
 
 ### Full Mode (`toolMode: 'full'`) — *Default for backwards compatibility*
 
 Includes all 6 compact tools plus 8 specialized tools:
-- Community clustering: `get_community`, `graph_stats`
+- Hub detection & community clustering: `god_nodes`, `get_community`, `graph_stats`
 - PR blast radius & triage: `list_prs`, `get_pr_impact`, `triage_prs`
-- Extensibility: `graphify_capabilities`, `graphify_call`, `graphify_resource`
+- Extensibility: `graphify_capabilities`, `graphify_call`
 
 ---
 
@@ -88,10 +88,11 @@ The `graphify_status` tool is exposed to both human operators and the model to v
 
 ```text
 === Graphify Status ===
+Overall: healthy
 Runtime:
   Command: /usr/local/bin/graphify-mcp (standalone-mcp)
   Version: 0.9.57
-  Transport: Connected (pid: 48120, generation: 1)
+  Transport: connected (generation: 1)
 Project:
   Project Path: /workspace/my-repo
   Graph Path: /workspace/my-repo/graphify-out/graph.json (exists: true)
@@ -99,6 +100,7 @@ Project:
   Active Tool Mode: compact (6 tools registered)
 Freshness:
   Status: fresh
+  Strategy: metadata
 =======================
 ```
 
@@ -106,13 +108,13 @@ When issues are detected (e.g., missing runtime, missing graph, or stale files),
 
 ---
 
-## Graph Freshness & Auto-Updates
+## Graph Freshness & Concurrency-Safe Updates
 
-Out-of-date graphs cause agents to hallucinate non-existent symbols or miss refactored dependencies. `dsh-graphify` tracks graph freshness via git commit timestamps and file modification times:
+Out-of-date graphs cause agents to hallucinate non-existent symbols or miss refactored dependencies. `dsh-graphify` tracks graph freshness via durable index metadata (`.dsh-graphify-index.json`), git branch/HEAD comparisons, and recursive file modification walks:
 
-- **`freshness: 'warn'` (Default)**: Injects an actionable warning into tool responses when git commits or file modifications occurred after the graph was last built.
-- **`freshness: 'auto'`**: Automatically triggers a background incremental graph update via `ProjectUpdateCoalescer` when staleness is detected. Simultaneous requests across multiple agents are deduplicated to prevent lock contention.
-- **`freshness: 'off'`**: Disables freshness evaluation for airgapped or static environments.
+- **`freshness: { mode: 'warn' }` (Default)**: Injects an actionable warning into tool responses when git commits or file modifications occurred after the graph was last built.
+- **`freshness: { mode: 'auto', updateTimeoutMs: 120000 }`**: Automatically triggers a coalesced pre-query incremental graph update via `ProjectUpdateCoalescer` before executing tools when staleness is detected. The process lock is held until child process termination, preventing duplicate jobs and race conditions across concurrent sessions.
+- **`freshness: { mode: 'off' }`**: Disables freshness evaluation for airgapped or static environments.
 
 ---
 
@@ -136,7 +138,8 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
 | `toolMode` | `'compact' \| 'full'` | `'full'` | Expose 6 core tools (`compact`) or all 14 tools (`full`). |
-| `freshness` | `'warn' \| 'auto' \| 'off'` | `'warn'` | Staleness policy: warn model, auto-update in background, or disable. |
+| `freshness.mode` | `'warn' \| 'auto' \| 'off'` | `'warn'` | Staleness policy: warn model, coalesced pre-query auto-update, or off. |
+| `freshness.updateTimeoutMs` | `number` | `120000` | Maximum wait duration in milliseconds for an incremental update. |
 | `command` | `string` | `'auto'` | MCP server executable or `'auto'` for automatic discovery. |
 | `args` | `string[]` | `[]` | Extra arguments for custom server executables. |
 | `graphifyVersion` | `string` | unset | Target version for `uv` fallback (e.g. `'0.9.57'`). |
@@ -148,9 +151,10 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 | `enablePromptSection` | `boolean` | `true` | Inject decision policy and navigation rules into agent system prompt. |
 | `timeoutMs` | `number` | `60000` | Per-MCP-operation timeout in milliseconds. |
 | `toolPrefix` | `string` | `''` | Prefix applied to all registered tool names (e.g. `graphify_`). |
-| `reconnect.maxRetries` | `number` | `3` | Maximum automatic reconnect attempts on unexpected process exits. |
+| `reconnect.enabled` | `boolean` | `true` | Enable automatic reconnection on unexpected process exits. |
+| `reconnect.maxAttempts` | `number` | `10` | Maximum consecutive automatic reconnect attempts. |
 | `reconnect.initialDelayMs`| `number` | `500` | Initial exponential backoff delay for reconnection. |
-| `reconnect.maxDelayMs` | `number` | `5000` | Maximum exponential backoff delay for reconnection. |
+| `reconnect.maxDelayMs` | `number` | `30000` | Maximum exponential backoff delay for reconnection. |
 
 ---
 

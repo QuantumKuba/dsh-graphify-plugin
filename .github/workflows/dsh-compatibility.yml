@@ -1,7 +1,8 @@
-name: DeepSeek Harness Compatibility
+name: DeepSeek Harness & Upstream Compatibility
 
 on:
   schedule:
+    # Run every Tuesday at 05:30 UTC
     - cron: '30 5 * * 2'
   workflow_dispatch:
 
@@ -9,9 +10,13 @@ permissions:
   contents: read
 
 jobs:
-  latest-dsh:
-    name: Test with latest DSH / Cordis
+  dsh-compatibility:
+    name: Test with DSH (${{ matrix.dsh_channel }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh_channel: [next, alpha]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -22,11 +27,47 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Upgrade to latest DSH and Cordis packages
-        run: pnpm add -D @deepseek-ai/cordis@latest @deepseek-ai/schemastery@latest
+      - name: Upgrade to DSH ${{ matrix.dsh_channel }} packages
+        run: |
+          pnpm add -D \
+            @deepseek-ai/cordis@latest \
+            @deepseek-ai/schemastery@latest \
+            @deepseek-ai/dsh-client-locale@${{ matrix.dsh_channel }} \
+            @deepseek-ai/dsh-client-ui-conversation@${{ matrix.dsh_channel }} \
+            @deepseek-ai/dsh-client-ui-primitives@${{ matrix.dsh_channel }} \
+            @deepseek-ai/dsh-client-ui-slots@${{ matrix.dsh_channel }} \
+            @deepseek-ai/dsh-commands@${{ matrix.dsh_channel }} \
+            @deepseek-ai/dsh-session@${{ matrix.dsh_channel }}
       - name: Typecheck
         run: pnpm run typecheck
       - name: Build
         run: pnpm run build
-      - name: Run unit & integration test suite
+      - name: Run unit & integration tests
         run: pnpm test
+      - name: Run schema drift detection
+        run: pnpm run test:drift
+
+  graphify-edge:
+    name: Test against live upstream Graphify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - name: Install latest Graphify MCP server
+        run: uv tool install 'graphifyy[mcp]'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm run build
+      - name: Run schema drift check against live Graphify
+        run: pnpm run test:drift
+      - name: Run E2E contract tests
+        run: GRAPHIFY_E2E=1 pnpm run test:e2e
