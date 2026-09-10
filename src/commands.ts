@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
 import { resolveGraphifyCliCommand } from './server-process.ts'
+import { writeGraphifyIndexMetadata } from './freshness.ts'
 
 export interface CommandInvocation {
   commandId?: unknown
@@ -127,6 +128,11 @@ export function registerGraphifyCommand(
         const request = parseGraphifyCommand(invocation.rawInput, projectRoot)
         const { command, args } = resolveGraphifyCliCommand(config, request)
         const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
+        try {
+          writeGraphifyIndexMetadata(request.projectRoot)
+        } catch {
+          // Metadata recording failure ignored
+        }
         return { kind: 'success', text }
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error)
