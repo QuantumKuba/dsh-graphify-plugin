@@ -1,0 +1,32 @@
+name: DeepSeek Harness Compatibility
+
+on:
+  schedule:
+    - cron: '30 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-dsh:
+    name: Test with latest DSH / Cordis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Upgrade to latest DSH and Cordis packages
+        run: pnpm add -D @deepseek-ai/cordis@latest @deepseek-ai/schemastery@latest
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Build
+        run: pnpm run build
+      - name: Run unit & integration test suite
+        run: pnpm test

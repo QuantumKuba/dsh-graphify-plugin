@@ -71,4 +71,27 @@ describe('Graphify release contract', () => {
       await client.dispose()
     }
   })
+
+  it('verifies upstream tool schemas have no breaking drift', async (context) => {
+    if (process.env.GRAPHIFY_E2E !== '1') {
+      context.skip('set GRAPHIFY_E2E=1 after installing graphifyy[mcp]')
+      return
+    }
+
+    const { compareToolSchemas } = await import('../src/schema-drift.ts')
+    const { createGraphifyToolDefinitions } = await import('../src/tools.ts')
+
+    const config = Config({ command: 'auto' })
+    const resolved = resolveGraphifyCommand(config, graphPath)
+    const client = new GraphifyMcpClient({ ...resolved, cwd: fixtureDir, timeoutMs: 30_000 })
+    try {
+      const upstreamTools = await client.listTools()
+      const nativeTools = createGraphifyToolDefinitions(client, config)
+      const report = compareToolSchemas(nativeTools, upstreamTools)
+      console.log(report.summary)
+      assert.equal(report.hasBreakingDrift, false, `Breaking drift detected:\n${report.summary}`)
+    } finally {
+      await client.dispose()
+    }
+  })
 })

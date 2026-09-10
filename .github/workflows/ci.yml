@@ -52,3 +52,6 @@ jobs:
 
       - name: Run test suite
         run: pnpm test
+
+      - name: Run schema drift check
+        run: pnpm run test:drift
