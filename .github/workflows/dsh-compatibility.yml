@@ -38,6 +38,9 @@ jobs:
             @deepseek-ai/dsh-client-ui-slots@${{ matrix.dsh_channel }} \
             @deepseek-ai/dsh-commands@${{ matrix.dsh_channel }} \
             @deepseek-ai/dsh-session@${{ matrix.dsh_channel }}
+      - name: Report tested versions
+        run: |
+          pnpm list @deepseek-ai/cordis @deepseek-ai/dsh-session @deepseek-ai/dsh-commands @deepseek-ai/dsh-client-ui-conversation --depth 0
       - name: Typecheck
         run: pnpm run typecheck
       - name: Build
