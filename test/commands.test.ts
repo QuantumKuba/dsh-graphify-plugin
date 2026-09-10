@@ -1,10 +1,14 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { Config } from '../src/config.ts'
 import { parseGraphifyCommand, registerGraphifyCommand, type CommandDefinition } from '../src/commands.ts'
+import { terminateChildProcess } from '../src/server-process.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
@@ -44,5 +48,88 @@ describe('/graphify command', () => {
     })
     assert.equal(result.kind, 'success')
     assert.match(result.text || '', new RegExp(`update",\\"${fixtureDir.replaceAll('/', '\\/')}\\"`))
+  })
+
+  it('terminates child process and quiesces when command is cancelled', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-cmd-cancel-'))
+    const pidFile = path.join(tempDir, 'child.pid')
+    const sleeperScript = path.join(tempDir, 'sleeper.mjs')
+    fs.writeFileSync(
+      sleeperScript,
+      `
+import fs from 'node:fs'
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+setInterval(() => {}, 1000)
+      `.trim()
+    )
+
+    const ctx = new Context()
+    let command: CommandDefinition | undefined
+    ctx.provide('commands')
+    ctx.commands = { register(definition: CommandDefinition) { command = definition; return () => {} } }
+    const config = Config({ cliCommand: process.execPath, cliArgs: [sleeperScript] })
+    registerGraphifyCommand(ctx, config, tempDir)
+
+    const controller = new AbortController()
+    const promise = command!.handler({
+      rawInput: 'build .',
+      agent: { session: { header: { cwd: tempDir } } },
+      signal: controller.signal,
+    })
+
+    // Wait for child to write its PID
+    for (let i = 0; i < 20 && !fs.existsSync(pidFile); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.ok(fs.existsSync(pidFile), 'Child should start and write PID')
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+    assert.ok(pid > 0)
+
+    // Abort the command
+    controller.abort()
+    const result = await promise
+    assert.equal(result.kind, 'error')
+    assert.match(result.text, /cancelled/i)
+
+    // Verify child process is dead
+    let isAlive = true
+    try {
+      process.kill(pid, 0)
+    } catch (err: unknown) {
+      if ((err as { code?: string }).code === 'ESRCH') isAlive = false
+    }
+    assert.equal(isAlive, false, 'Child process must be dead after cancellation')
+
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('escalates from SIGTERM to SIGKILL when process is stubborn', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-stubborn-'))
+    const pidFile = path.join(tempDir, 'stubborn.pid')
+    const stubbornPath = path.join(__dirname, 'fixtures', 'stubborn-process.mjs')
+
+    const child = spawn(process.execPath, [stubbornPath], {
+      env: { ...process.env, PID_FILE: pidFile },
+      stdio: 'ignore',
+    })
+
+    for (let i = 0; i < 20 && !fs.existsSync(pidFile); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+    assert.ok(pid > 0)
+
+    // Terminate with a short 100ms grace period to trigger SIGKILL escalation
+    await terminateChildProcess(child, 100)
+
+    let isAlive = true
+    try {
+      process.kill(pid, 0)
+    } catch (err: unknown) {
+      if ((err as { code?: string }).code === 'ESRCH') isAlive = false
+    }
+    assert.equal(isAlive, false, 'Stubborn process must be killed via SIGKILL')
+
+    fs.rmSync(tempDir, { recursive: true, force: true })
   })
 })

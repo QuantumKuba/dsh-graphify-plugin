@@ -129,7 +129,10 @@ export function registerGraphifyCommand(
         const { command, args } = resolveGraphifyCliCommand(config, request)
         const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
         try {
-          writeGraphifyIndexMetadata(request.projectRoot)
+          const graphJsonPath = config.graphPath
+            ? path.resolve(request.projectRoot, config.graphPath)
+            : undefined
+          writeGraphifyIndexMetadata(request.projectRoot, graphJsonPath)
         } catch {
           // Metadata recording failure ignored
         }
@@ -176,6 +179,10 @@ function runGraphify(command: string, args: readonly string[], cwd: string, sign
     signal.addEventListener('abort', onAbort, { once: true })
     child.once('error', (error) => settle(() => reject(error)))
     child.once('close', (code, childSignal) => {
+      if (signal.aborted) {
+        settle(() => reject(new Error('Graphify command cancelled')))
+        return
+      }
       if (code === 0) {
         settle(() => resolve(stdout || 'Graphify completed successfully.'))
         return
