@@ -527,7 +527,7 @@ process.exit(0)
       registerGraphifyCommand(ctx, config, tempDir)
 
       const cmdResult = await registeredCommand.handler({
-        rawInput: 'update .',
+        rawInput: 'build .',
         agent: { session: { header: { cwd: tempDir } } },
         signal: new AbortController().signal,
       })

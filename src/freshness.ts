@@ -114,8 +114,18 @@ export function parseNameStatusZ(raw: string): ChangedSource[] {
  * Durable metadata recorded by dsh-graphify after a successful graph build or update.
  *
  * V1: Original format without working-tree fingerprint.
- * V2: Adds `workingTreeFingerprint` for deterministic dirty-state tracking.
+ * V2: Adds `workingTreeFingerprint` for whole-tree dirty-state tracking.
+ * V3: Adds per-path `indexedPaths` baseline capturing dirty files at index time,
+ *     enabling exact delta reconstruction even when indexed dirty files are reverted or modified.
  */
+export interface IndexedPathState {
+  readonly path: string
+  readonly state:
+    | { readonly kind: 'modified'; readonly hash: string }
+    | { readonly kind: 'untracked'; readonly hash: string }
+    | { readonly kind: 'deleted' }
+}
+
 export interface GraphifyIndexMetadataV1 {
   readonly version: 1
   readonly indexedAt: string
@@ -128,8 +138,8 @@ export interface GraphifyIndexMetadataV1 {
   }
 }
 
-export interface GraphifyIndexMetadata {
-  readonly version: 1 | 2
+export interface GraphifyIndexMetadataV2 {
+  readonly version: 2
   readonly indexedAt: string
   readonly graphPath: string
   readonly graphMtimeMs: number
@@ -142,6 +152,27 @@ export interface GraphifyIndexMetadata {
   }
 }
 
+export interface GraphifyIndexMetadataV3 {
+  readonly version: 3
+  readonly indexedAt: string
+  readonly graphPath: string
+  readonly graphMtimeMs: number
+  readonly git?: {
+    readonly head: string
+    readonly tree: string
+    readonly branch?: string | null
+    /** SHA-256 hash of tracked working tree diffs and untracked file manifest at index time. */
+    readonly workingTreeFingerprint?: string
+    /** Per-path dirty baseline states at graph-index time. */
+    readonly indexedPaths?: Record<string, { kind: 'modified'; hash: string } | { kind: 'untracked'; hash: string } | { kind: 'deleted' }>
+  }
+}
+
+export type GraphifyIndexMetadata =
+  | GraphifyIndexMetadataV1
+  | GraphifyIndexMetadataV2
+  | GraphifyIndexMetadataV3
+
 export interface UpdateResult {
   readonly success: boolean
   readonly stdout: string
@@ -151,6 +182,50 @@ export interface UpdateResult {
 
 /** Large-file threshold for streaming hash instead of full read (10 MB). */
 const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
+
+/**
+ * Computes deterministic SHA-256 content hash of a file.
+ * Bounds memory using 64KB streaming for files exceeding LARGE_FILE_THRESHOLD.
+ * Verifies symlink targets stay within projectRoot to prevent boundary escapes.
+ */
+export function hashFileContent(fullPath: string, projectRoot?: string): string | undefined {
+  try {
+    const lstat = fs.lstatSync(fullPath)
+    if (lstat.isSymbolicLink()) {
+      const real = fs.realpathSync(fullPath)
+      if (projectRoot) {
+        const rel = path.relative(path.resolve(projectRoot), real)
+        if (rel.startsWith('..') || path.isAbsolute(rel)) {
+          return undefined
+        }
+      }
+      const realStat = fs.statSync(real)
+      if (!realStat.isFile()) return undefined
+    } else if (!lstat.isFile()) {
+      return undefined
+    }
+
+    const stat = fs.statSync(fullPath)
+    const hash = createHash('sha256')
+    if (stat.size > LARGE_FILE_THRESHOLD) {
+      const fd = fs.openSync(fullPath, 'r')
+      try {
+        const buf = Buffer.alloc(65536)
+        let bytesRead: number
+        while ((bytesRead = fs.readSync(fd, buf)) > 0) {
+          hash.update(buf.subarray(0, bytesRead))
+        }
+      } finally {
+        fs.closeSync(fd)
+      }
+    } else {
+      hash.update(fs.readFileSync(fullPath))
+    }
+    return hash.digest('hex')
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * Computes a deterministic fingerprint of the working tree's dirty state.
@@ -196,7 +271,7 @@ export function computeWorkingTreeFingerprint(
       }
     }
 
-    // Tracked working tree changes relative to HEAD (covers both staged and unstaged modifications)
+    // Tracked working tree changes relative to HEAD (covers effective working tree modifications)
     const diffRes = spawnSync('git', ['diff', '--binary', 'HEAD', '--', '.', ...pathspecExclusions], {
       cwd: projectRoot,
       encoding: 'utf8',
@@ -218,31 +293,100 @@ export function computeWorkingTreeFingerprint(
         .sort()
       for (const file of files) {
         hash.update(`untracked:${file}\n`)
-        try {
-          const fullPath = path.join(projectRoot, file)
-          const stat = fs.statSync(fullPath)
-          if (stat.size > LARGE_FILE_THRESHOLD) {
-            // Stream hash for large files to bound memory
-            const fd = fs.openSync(fullPath, 'r')
-            try {
-              const buf = Buffer.alloc(65536)
-              let bytesRead: number
-              while ((bytesRead = fs.readSync(fd, buf)) > 0) {
-                hash.update(buf.subarray(0, bytesRead))
-              }
-            } finally {
-              fs.closeSync(fd)
-            }
-          } else {
-            hash.update(fs.readFileSync(fullPath))
-          }
-        } catch {
+        const fullPath = path.join(projectRoot, file)
+        const fileHash = hashFileContent(fullPath, projectRoot)
+        if (fileHash) {
+          hash.update(fileHash)
+        } else {
           hash.update('unreadable\n')
         }
       }
     }
 
     return hash.digest('hex')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Captures per-path dirty baseline states at graph-index time.
+ * Allows comparing indexed dirty working tree against current source state.
+ */
+export function captureIndexedPathStates(
+  projectRoot: string,
+  excludePaths?: Set<string>
+): Record<string, { kind: 'modified'; hash: string } | { kind: 'untracked'; hash: string } | { kind: 'deleted' }> | undefined {
+  try {
+    const indexedPaths: Record<string, { kind: 'modified'; hash: string } | { kind: 'untracked'; hash: string } | { kind: 'deleted' }> = {}
+
+    const isExcluded = (relativePath: string): boolean => {
+      if (relativePath.startsWith('graphify-out/') || relativePath === 'graphify-out' ||
+          relativePath.includes('/graphify-out/')) return true
+      if (path.basename(relativePath) === INDEX_METADATA_FILENAME) return true
+      if (excludePaths) {
+        for (const exc of excludePaths) {
+          if (relativePath === exc || relativePath.startsWith(exc + '/')) return true
+        }
+      }
+      return false
+    }
+
+    const pathspecExclusions = [
+      ':!graphify-out',
+      ':!*/graphify-out',
+      ':!*.dsh-graphify-index.json',
+      ':!*.dsh-graphify-index.json*',
+    ]
+    if (excludePaths) {
+      for (const exc of excludePaths) {
+        pathspecExclusions.push(`:!${exc}`)
+      }
+    }
+
+    // 1. Tracked working tree diff against HEAD
+    const diffRes = spawnSync('git', ['diff', '--name-status', '-z', '-M', 'HEAD', '--', '.', ...pathspecExclusions], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    })
+    if (diffRes.status === 0 && diffRes.stdout) {
+      const changed = parseNameStatusZ(diffRes.stdout)
+      for (const change of changed) {
+        if (isExcluded(change.path)) continue
+        if (change.status === 'deleted') {
+          indexedPaths[change.path] = { kind: 'deleted' }
+        } else {
+          if (change.status === 'renamed' && change.oldPath && !isExcluded(change.oldPath)) {
+            indexedPaths[change.oldPath] = { kind: 'deleted' }
+          }
+          const fullPath = path.join(projectRoot, change.path)
+          const hash = hashFileContent(fullPath, projectRoot)
+          if (hash) {
+            indexedPaths[change.path] = { kind: 'modified', hash }
+          }
+        }
+      }
+    }
+
+    // 2. Untracked files
+    const untrackedRes = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', '.'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    })
+    if (untrackedRes.status === 0 && untrackedRes.stdout) {
+      const files = untrackedRes.stdout.split('\0').filter(f => f && !isExcluded(f))
+      for (const file of files) {
+        const fullPath = path.join(projectRoot, file)
+        const hash = hashFileContent(fullPath, projectRoot)
+        if (hash) {
+          indexedPaths[file] = { kind: 'untracked', hash }
+        }
+      }
+    }
+
+    return indexedPaths
   } catch {
     return undefined
   }
@@ -267,12 +411,13 @@ function buildExcludePaths(projectRoot: string, graphPath: string): Set<string> 
 }
 
 /**
- * Writes a durable v2 index metadata file beside the graph.json.
+ * Writes a durable v3 index metadata file beside graph.json.
+ * Uses atomic file write (temp file -> fsync -> rename) to prevent partial reads.
  */
 export function writeGraphifyIndexMetadata(
   projectRoot: string,
   customGraphPath?: string
-): GraphifyIndexMetadata | null {
+): GraphifyIndexMetadataV3 | null {
   const graphPath = customGraphPath || path.join(projectRoot, 'graphify-out', 'graph.json')
   if (!fs.existsSync(graphPath)) return null
 
@@ -285,7 +430,7 @@ export function writeGraphifyIndexMetadata(
 
   const excludePaths = buildExcludePaths(projectRoot, graphPath)
 
-  let gitInfo: GraphifyIndexMetadata['git']
+  let gitInfo: GraphifyIndexMetadataV3['git']
   try {
     const headRes = spawnSync('git', ['rev-parse', 'HEAD'], {
       cwd: projectRoot,
@@ -307,15 +452,16 @@ export function writeGraphifyIndexMetadata(
       })
       const branch = branchRes.status === 0 ? branchRes.stdout.trim() : null
       const workingTreeFingerprint = computeWorkingTreeFingerprint(projectRoot, excludePaths)
+      const indexedPaths = captureIndexedPathStates(projectRoot, excludePaths)
 
-      gitInfo = { head, tree, branch, workingTreeFingerprint }
+      gitInfo = { head, tree, branch, workingTreeFingerprint, indexedPaths }
     }
   } catch {
     // Non-git environment
   }
 
-  const metadata: GraphifyIndexMetadata = {
-    version: 2,
+  const metadata: GraphifyIndexMetadataV3 = {
+    version: 3,
     indexedAt: new Date(graphMtimeMs).toISOString(),
     graphPath: path.relative(projectRoot, graphPath),
     graphMtimeMs,
@@ -326,7 +472,16 @@ export function writeGraphifyIndexMetadata(
   if (fs.existsSync(metaDir)) {
     try {
       const metaFilePath = path.join(metaDir, INDEX_METADATA_FILENAME)
-      fs.writeFileSync(metaFilePath, JSON.stringify(metadata, null, 2), 'utf8')
+      const tempFilePath = path.join(metaDir, `${INDEX_METADATA_FILENAME}.${Date.now()}.${process.pid}.tmp`)
+      fs.writeFileSync(tempFilePath, JSON.stringify(metadata, null, 2), 'utf8')
+      try {
+        const fd = fs.openSync(tempFilePath, 'r')
+        fs.fsyncSync(fd)
+        fs.closeSync(fd)
+      } catch {
+        // fsync error ignored
+      }
+      fs.renameSync(tempFilePath, metaFilePath)
       return metadata
     } catch {
       // Ignored if unwritable
@@ -337,7 +492,7 @@ export function writeGraphifyIndexMetadata(
 
 /**
  * Reads durable index metadata from beside the graph.json file.
- * Accepts both v1 and v2 metadata formats.
+ * Accepts v1, v2, and v3 metadata formats.
  *
  * @param projectRoot - Project root directory.
  * @param graphJsonPath - Explicit path to graph.json; when provided, metadata is
@@ -356,7 +511,11 @@ export function readGraphifyIndexMetadata(
   try {
     const raw = fs.readFileSync(metaPath, 'utf8')
     const parsed = JSON.parse(raw) as GraphifyIndexMetadata
-    if (parsed && (parsed.version === 1 || parsed.version === 2) && typeof parsed.graphMtimeMs === 'number') {
+    if (
+      parsed &&
+      (parsed.version === 1 || parsed.version === 2 || parsed.version === 3) &&
+      typeof parsed.graphMtimeMs === 'number'
+    ) {
       return parsed
     }
   } catch {
@@ -395,12 +554,26 @@ export function checkGraphFreshness(
 
   // 1. Check durable index metadata first if available (respects custom graphPath)
   const metadata = readGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
+  const isCanonical = isCanonicalGraphForProject(project.projectRoot, project.graphJsonPath)
   if (metadata && metadata.git) {
     const metaGitCheck = checkMetadataGitFreshness(project.projectRoot, metadata, project.graphJsonPath)
     if (metaGitCheck) {
+      const baselineAvailable = metadata.version === 3 && metadata.git.indexedPaths !== undefined
+      let autoUpdateEligible: boolean | undefined
+      let autoUpdateBlockReason: string | undefined
+      if (metaGitCheck.state === 'stale') {
+        const eligibility = evaluateAutoUpdateEligibility(project)
+        autoUpdateEligible = eligibility.kind === 'eligible'
+        autoUpdateBlockReason = eligibility.kind !== 'eligible' ? eligibility.reason : undefined
+      }
       return {
         ...metaGitCheck,
         lastIndexedTime: metadata.indexedAt || lastIndexedTime,
+        metadataVersion: metadata.version,
+        baselineAvailable,
+        isCanonicalTarget: isCanonical,
+        autoUpdateEligible,
+        autoUpdateBlockReason,
       }
     }
   }
@@ -488,14 +661,11 @@ function checkMetadataGitFreshness(
       }
     }
 
-    // V2 fingerprint comparison: deterministic dirty-state tracking.
-    // If the metadata has a workingTreeFingerprint (v2), compare it against
-    // the current working tree state. This allows indexing dirty repos without
-    // perpetual false-positive staleness.
-    if (metadata.version === 2 && metadata.git?.workingTreeFingerprint) {
+    // V3 metadata check: exact per-path baseline comparison
+    if (metadata.version === 3 && metadata.git?.workingTreeFingerprint) {
       const excludePaths = graphJsonPath ? buildExcludePaths(projectRoot, graphJsonPath) : undefined
       const currentFingerprint = computeWorkingTreeFingerprint(projectRoot, excludePaths)
-      if (currentFingerprint && currentFingerprint === metadata.git.workingTreeFingerprint) {
+      if (currentFingerprint && currentFingerprint === metadata.git.workingTreeFingerprint && currentHead === metadata.git.head) {
         return {
           state: 'fresh',
           reason: `Graph matches current Git HEAD (${currentHead.slice(0, 7)}) and working tree fingerprint`,
@@ -504,19 +674,57 @@ function checkMetadataGitFreshness(
           strategy: 'metadata',
         }
       }
-      if (currentFingerprint && currentFingerprint !== metadata.git.workingTreeFingerprint) {
-        const inventory = getChangedSourceInventory(projectRoot, metadata, graphJsonPath)
-        const changedFilesCount = inventory.complete ? inventory.files.length : undefined
-        const changedFilesSample = inventory.complete ? inventory.files.slice(0, 5).map(f => f.path) : undefined
+
+      const inventory = getChangedSourceInventory(projectRoot, metadata, graphJsonPath)
+      if (inventory.complete && inventory.files.length === 0) {
         return {
-          state: 'stale',
-          reason: 'Working tree changed since graph was indexed (fingerprint mismatch)',
-          changedFilesCount,
-          changedFilesSample,
+          state: 'fresh',
+          reason: `Graph matches current Git HEAD (${currentHead.slice(0, 7)}) and working tree content baseline`,
+          changedFilesCount: 0,
+          changedFilesSample: [],
           strategy: 'metadata',
         }
       }
-      // Fingerprint unavailable — fall through to porcelain check
+
+      const changedFilesCount = inventory.complete ? inventory.files.length : undefined
+      const changedFilesSample = inventory.complete ? inventory.files.slice(0, 5).map(f => f.path) : undefined
+      return {
+        state: 'stale',
+        reason: inventory.complete
+          ? `Working tree changed since graph was indexed (${inventory.files.length} file(s) modified, added, or deleted)`
+          : (inventory.reason || 'Working tree changed since graph was indexed'),
+        changedFilesCount,
+        changedFilesSample,
+        strategy: 'metadata',
+      }
+    }
+
+    // V2 fingerprint comparison: deterministic dirty-state tracking.
+    // If the metadata has a workingTreeFingerprint (v2), compare it against
+    // the current working tree state. This allows indexing dirty repos without
+    // perpetual false-positive staleness.
+    if (metadata.version === 2 && metadata.git?.workingTreeFingerprint) {
+      const excludePaths = graphJsonPath ? buildExcludePaths(projectRoot, graphJsonPath) : undefined
+      const currentFingerprint = computeWorkingTreeFingerprint(projectRoot, excludePaths)
+      if (currentFingerprint && currentFingerprint === metadata.git.workingTreeFingerprint && currentHead === metadata.git.head) {
+        return {
+          state: 'fresh',
+          reason: `Graph matches current Git HEAD (${currentHead.slice(0, 7)}) and working tree fingerprint`,
+          changedFilesCount: 0,
+          changedFilesSample: [],
+          strategy: 'metadata',
+        }
+      }
+      const inventory = getChangedSourceInventory(projectRoot, metadata, graphJsonPath)
+      const changedFilesCount = inventory.complete ? inventory.files.length : undefined
+      const changedFilesSample = inventory.complete ? inventory.files.slice(0, 5).map(f => f.path) : undefined
+      return {
+        state: 'stale',
+        reason: 'Working tree changed since graph was indexed (v2 legacy metadata)',
+        changedFilesCount,
+        changedFilesSample,
+        strategy: 'metadata',
+      }
     }
 
     // V1 fallback: check uncommitted changes in working tree scoped to projectRoot
@@ -738,17 +946,20 @@ export function checkFilesystemRecursiveFreshness(
 }
 
 /**
- * Collects the inventory of changed source files between the indexed state and the current working tree.
+ * Collects the inventory of changed source files between the indexed baseline state and the current working tree.
  *
- * Uses NUL-delimited Git commands with rename tracking (-M) to safely identify modified,
- * added, deleted, and renamed files.
+ * For v3 metadata: Compares current source state directly against indexed dirty path states and commit tree.
+ * Correctly detects modifications, additions, deletions, renames, and dirty-file reversions without false-fresh.
+ *
+ * For v1/v2 or missing metadata: Fails safe by returning `complete: false` so callers never assume code-only
+ * updates can safely restore freshness.
  */
 export function getChangedSourceInventory(
   projectRoot: string,
   metadata?: GraphifyIndexMetadata | null,
   graphJsonPath?: string | null
 ): ChangedSourceInventory {
-  const excludePaths = graphJsonPath ? buildExcludePaths(projectRoot, graphJsonPath) : new Set<string>()
+  const excludePaths = graphJsonPath ? buildExcludePaths(projectRoot, graphJsonPath) : buildExcludePaths(projectRoot, path.join(projectRoot, 'graphify-out', 'graph.json'))
 
   const isExcluded = (relativePath: string): boolean => {
     if (relativePath.startsWith('graphify-out/') || relativePath === 'graphify-out' ||
@@ -785,43 +996,60 @@ export function getChangedSourceInventory(
       reason: 'Git repository has no HEAD commit.',
     }
   }
-  const currentHead = headRes.stdout.trim()
 
-  const allChanges: ChangedSource[] = []
-
-  // 1. If metadata recorded a git commit, and current HEAD differs, diff between recorded head and current HEAD
-  if (metadata?.git?.head && metadata.git.head !== currentHead) {
-    const commitDiffRes = spawnSync('git', ['diff', '--name-status', '-z', '-M', metadata.git.head, currentHead, '--', '.'], {
+  // Legacy (v1, v2) or missing metadata: cannot reliably reconstruct changes relative to indexed dirty state.
+  // Fail safe by returning complete: false with a diagnostic sample.
+  if (!metadata || metadata.version !== 3 || !metadata.git?.indexedPaths) {
+    const uncommittedDiffRes = spawnSync('git', ['diff', '--name-status', '-z', '-M', 'HEAD', '--', '.'], {
       cwd: projectRoot,
       encoding: 'utf8',
       timeout: 5000,
     })
-    if (commitDiffRes.status !== 0) {
-      return {
-        files: [],
-        complete: false,
-        reason: `Could not compare git HEAD against previous indexed commit ${metadata.git.head.slice(0, 7)}.`,
+    const bestEffort: ChangedSource[] = []
+    if (uncommittedDiffRes.status === 0 && uncommittedDiffRes.stdout) {
+      bestEffort.push(...parseNameStatusZ(uncommittedDiffRes.stdout).filter(f => !isExcluded(f.path)))
+    }
+    const untrackedRes = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', '.'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    })
+    if (untrackedRes.status === 0 && untrackedRes.stdout) {
+      for (const t of untrackedRes.stdout.split('\0')) {
+        if (t && !isExcluded(t)) {
+          bestEffort.push({ path: t, status: 'added' })
+        }
       }
     }
-    allChanges.push(...parseNameStatusZ(commitDiffRes.stdout))
+    const reason = metadata
+      ? `Freshness metadata predates source-state tracking (version ${metadata.version}); run a full graph rebuild to establish a trustworthy freshness baseline.`
+      : 'No freshness metadata found; run a full graph rebuild to establish a trustworthy freshness baseline.'
+    return {
+      files: bestEffort,
+      complete: false,
+      reason,
+    }
   }
 
-  // 2. Tracked working tree changes relative to current HEAD (both unstaged and staged)
-  const workTreeDiffRes = spawnSync('git', ['diff', '--name-status', '-z', '-M', 'HEAD', '--', '.'], {
+  const indexedHead = metadata.git.head
+  const indexedPaths = metadata.git.indexedPaths
+
+  // Tracked changes in current working tree relative to indexed commit
+  const commitDiffRes = spawnSync('git', ['diff', '--name-status', '-z', '-M', indexedHead, '--', '.'], {
     cwd: projectRoot,
     encoding: 'utf8',
     timeout: 5000,
   })
-  if (workTreeDiffRes.status !== 0) {
+  if (commitDiffRes.status !== 0) {
     return {
       files: [],
       complete: false,
-      reason: 'Could not inspect uncommitted git diffs.',
+      reason: `Could not compare working tree against indexed commit ${indexedHead.slice(0, 7)}.`,
     }
   }
-  allChanges.push(...parseNameStatusZ(workTreeDiffRes.stdout))
+  const diffAgainstIndexedHead = parseNameStatusZ(commitDiffRes.stdout).filter(c => !isExcluded(c.path))
 
-  // 3. Untracked files
+  // Untracked files currently on disk
   const untrackedRes = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', '.'], {
     cwd: projectRoot,
     encoding: 'utf8',
@@ -834,33 +1062,100 @@ export function getChangedSourceInventory(
       reason: 'Could not inspect untracked files.',
     }
   }
-  const untrackedTokens = untrackedRes.stdout.split('\0')
-  for (const token of untrackedTokens) {
-    if (token) {
-      allChanges.push({ path: token, status: 'added' })
+  const untrackedNow = untrackedRes.stdout.split('\0').filter(t => t && !isExcluded(t))
+  const untrackedSet = new Set(untrackedNow)
+
+  // Candidate paths map: tracked diffs relative to indexedHead
+  const candidateMap = new Map<string, ChangedSource>()
+  for (const c of diffAgainstIndexedHead) {
+    candidateMap.set(c.path, c)
+  }
+
+  const allCandidatePaths = new Set<string>([
+    ...candidateMap.keys(),
+    ...untrackedNow,
+    ...Object.keys(indexedPaths),
+  ])
+
+  const effectiveChanges: ChangedSource[] = []
+
+  for (const relPath of allCandidatePaths) {
+    if (isExcluded(relPath)) continue
+
+    const idxState = indexedPaths[relPath]
+    const fullPath = path.join(projectRoot, relPath)
+    const existsNow = fs.existsSync(fullPath)
+
+    if (!existsNow) {
+      // File does not exist on disk now
+      if (idxState) {
+        if (idxState.kind !== 'deleted') {
+          // File existed at index time (modified or untracked), now deleted
+          effectiveChanges.push({ path: relPath, status: 'deleted' })
+        }
+        // If idxState.kind === 'deleted', it was already deleted at index time -> no change
+      } else {
+        // Was clean in indexedHead. If it was deleted relative to indexedHead, record deletion
+        const diffEntry = candidateMap.get(relPath)
+        if (diffEntry && diffEntry.status === 'deleted') {
+          effectiveChanges.push({ path: relPath, status: 'deleted' })
+        }
+      }
+    } else {
+      // File exists on disk now
+      const currentHash = hashFileContent(fullPath, projectRoot)
+      if (currentHash === undefined) {
+        return {
+          files: [],
+          complete: false,
+          reason: `Unreadable file encountered: ${relPath}`,
+        }
+      }
+
+      if (idxState) {
+        if (idxState.kind === 'deleted') {
+          // File was deleted at index time, now exists on disk -> added
+          effectiveChanges.push({ path: relPath, status: 'added' })
+        } else {
+          // Existed at index time with idxState.hash. Compare hashes:
+          if (currentHash !== idxState.hash) {
+            effectiveChanges.push({ path: relPath, status: 'modified' })
+          }
+          // If currentHash === idxState.hash -> byte-identical to indexed baseline! Unchanged!
+        }
+      } else {
+        // Was NOT in indexedPaths, meaning at index time it was clean in indexedHead.
+        const diffEntry = candidateMap.get(relPath)
+        if (diffEntry) {
+          if (diffEntry.status === 'added') {
+            effectiveChanges.push({ path: relPath, status: 'added' })
+          } else if (diffEntry.status === 'renamed') {
+            effectiveChanges.push({ path: relPath, status: 'renamed', oldPath: diffEntry.oldPath })
+          } else {
+            effectiveChanges.push({ path: relPath, status: 'modified' })
+          }
+        } else if (untrackedSet.has(relPath)) {
+          // Untracked file that did not exist at index time -> added!
+          effectiveChanges.push({ path: relPath, status: 'added' })
+        }
+        // If not in diffAgainstIndexedHead and not untracked, it matches indexedHead, which was the indexed baseline! Unchanged!
+      }
     }
   }
 
-  // Filter excluded files and deduplicate
-  const filtered: ChangedSource[] = []
-  const seenKeys = new Set<string>()
-
-  for (const change of allChanges) {
-    if (change.status === 'renamed' && change.oldPath) {
-      if (isExcluded(change.path) && isExcluded(change.oldPath)) continue
-    } else if (isExcluded(change.path)) {
-      continue
-    }
-
+  // Deduplicate
+  const seen = new Set<string>()
+  const finalFiles: ChangedSource[] = []
+  for (const change of effectiveChanges) {
     const key = `${change.status}:${change.path}:${change.oldPath ?? ''}`
-    if (!seenKeys.has(key)) {
-      seenKeys.add(key)
-      filtered.push(change)
+    if (!seen.has(key)) {
+      seen.add(key)
+      finalFiles.push(change)
     }
   }
 
   return {
-    files: filtered,
+    files: finalFiles,
     complete: true,
   }
 }
@@ -917,7 +1212,8 @@ export type AutoUpdateEligibility =
  * Policy for v0.2.0: All-or-nothing.
  * An incremental update is only eligible if:
  * 1. The target graph is the canonical project graph (`graphify-out/graph.json`).
- * 2. Every detected changed source has a proven code extension supported by Graphify AST extractors.
+ * 2. Trustworthy v3 metadata baseline is available.
+ * 3. Every detected changed source has a proven code extension supported by Graphify AST extractors.
  * If any non-code, documentation, manifest, or unproven source has changed, auto-update is rejected.
  */
 export function evaluateAutoUpdateEligibility(project: ResolvedProject): AutoUpdateEligibility {
@@ -936,6 +1232,15 @@ export function evaluateAutoUpdateEligibility(project: ResolvedProject): AutoUpd
   }
 
   const metadata = readGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
+  if (!metadata || metadata.version !== 3 || !metadata.git?.indexedPaths) {
+    return {
+      kind: 'unknown',
+      reason: metadata
+        ? `Freshness metadata predates source-state tracking (version ${metadata.version}); run a full graph rebuild to establish a trustworthy freshness baseline.`
+        : 'No freshness metadata found; run a full graph rebuild to establish a trustworthy freshness baseline.',
+    }
+  }
+
   const inventory = getChangedSourceInventory(project.projectRoot, metadata, project.graphJsonPath)
 
   if (!inventory.complete) {
@@ -967,8 +1272,8 @@ export function evaluateAutoUpdateEligibility(project: ResolvedProject): AutoUpd
 }
 
 /**
- * Validates that an incremental update produced a valid, coherent graph before
- * writing freshness metadata.
+ * Validates that a graph file represents a valid, coherent Graphify knowledge graph
+ * according to Graphify's JSON export contract before writing freshness metadata.
  */
 export function performPostUpdateValidation(projectRoot: string, graphJsonPath: string): boolean {
   try {
@@ -977,7 +1282,11 @@ export function performPostUpdateValidation(projectRoot: string, graphJsonPath: 
     if (!stat.isFile() || stat.size === 0) return false
     const raw = fs.readFileSync(graphJsonPath, 'utf8')
     const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return false
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false
+
+    // Meaningful Graphify contract verification:
+    if (!Array.isArray(parsed.nodes)) return false
+    if (!Array.isArray(parsed.links) && !Array.isArray(parsed.edges)) return false
     if (!fs.existsSync(projectRoot) || !fs.statSync(projectRoot).isDirectory()) return false
     return true
   } catch {
@@ -985,15 +1294,27 @@ export function performPostUpdateValidation(projectRoot: string, graphJsonPath: 
   }
 }
 
+interface ActiveCaller {
+  signal?: AbortSignal
+  resolve: (res: UpdateResult) => void
+  onAbort?: () => void
+}
+
+interface ActiveRun {
+  callers: Set<ActiveCaller>
+  abortChild: () => void
+}
+
 /**
  * Coalesces concurrent update requests for the same project root so multiple
  * agent turns never trigger duplicate simultaneous rebuilds.
  *
- * Guarantees that the project lock remains held until the underlying child
- * process has fully terminated, preventing race conditions on timeout or abort.
+ * Tracks individual callers with AbortSignals so that one caller aborting
+ * never cancels an in-progress update that other concurrent callers are awaiting.
+ * Escalates to SIGTERM -> SIGKILL only when all callers have aborted or on timeout.
  */
 export class ProjectUpdateCoalescer {
-  private inProgress = new Map<string, Promise<UpdateResult>>()
+  private activeRuns = new Map<string, ActiveRun>()
   private spawnFn: typeof spawn
 
   constructor(options?: { spawn?: typeof spawn }) {
@@ -1003,75 +1324,105 @@ export class ProjectUpdateCoalescer {
   /**
    * Runs or awaits an in-progress incremental update for the given project.
    */
-  async update(
-    config: Config,
-    projectRoot: string,
-    signal?: AbortSignal,
-    graphJsonPath?: string | null
-  ): Promise<UpdateResult> {
-    const canonical = path.resolve(projectRoot)
-    const existing = this.inProgress.get(canonical)
-    if (existing) {
-      return existing
-    }
-
-    const promise = this.executeIncrementalUpdate(config, canonical, signal, graphJsonPath)
-    this.inProgress.set(canonical, promise)
-
-    try {
-      return await promise
-    } finally {
-      this.inProgress.delete(canonical)
-    }
-  }
-
-  private executeIncrementalUpdate(
+  update(
     config: Config,
     projectRoot: string,
     signal?: AbortSignal,
     _graphJsonPath?: string | null
   ): Promise<UpdateResult> {
+    const canonical = path.resolve(projectRoot)
+
     return new Promise((resolve) => {
+      if (signal?.aborted) {
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: '',
+          error: 'Graphify update cancelled by signal',
+        })
+        return
+      }
+
+      const caller: ActiveCaller = { signal, resolve }
+
+      let activeRun = this.activeRuns.get(canonical)
+      if (activeRun) {
+        if (signal) {
+          const onAbort = () => {
+            signal.removeEventListener('abort', onAbort)
+            activeRun?.callers.delete(caller)
+            resolve({
+              success: false,
+              stdout: '',
+              stderr: '',
+              error: 'Graphify update cancelled by signal',
+            })
+            if (activeRun && activeRun.callers.size === 0) {
+              activeRun.abortChild()
+            }
+          }
+          caller.onAbort = onAbort
+          signal.addEventListener('abort', onAbort, { once: true })
+        }
+        activeRun.callers.add(caller)
+        return
+      }
+
+      // Start new run
+      const callers = new Set<ActiveCaller>([caller])
+      let isExited = false
+      let timer: NodeJS.Timeout | undefined
+
       const { command, args } = resolveGraphifyCliCommand(config, {
         operation: 'update',
-        projectRoot,
+        projectRoot: canonical,
         flags: [],
       })
 
       const child = this.spawnFn(command, args, {
-        cwd: projectRoot,
+        cwd: canonical,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
 
-      let stdout = ''
-      let stderr = ''
-      let isExited = false
-      let killTimer: NodeJS.Timeout | undefined
+      const terminateChild = (_reason: string) => {
+        if (isExited) return
+        terminateChildProcess(child as any, 1500)
+      }
 
-      const cleanupAndResolve = (result: UpdateResult) => {
-        if (killTimer) clearTimeout(killTimer)
-        if (timer) clearTimeout(timer)
-        signal?.removeEventListener('abort', onAbort)
-        resolve(result)
+      const abortChild = () => {
+        terminateChild('All callers aborted')
+      }
+
+      activeRun = { callers, abortChild }
+      this.activeRuns.set(canonical, activeRun)
+
+      if (signal) {
+        const onAbort = () => {
+          signal.removeEventListener('abort', onAbort)
+          activeRun?.callers.delete(caller)
+          resolve({
+            success: false,
+            stdout: '',
+            stderr: '',
+            error: 'Graphify update cancelled by signal',
+          })
+          if (activeRun && activeRun.callers.size === 0) {
+            activeRun.abortChild()
+          }
+        }
+        caller.onAbort = onAbort
+        signal.addEventListener('abort', onAbort, { once: true })
       }
 
       const timeoutMs = config.freshness?.updateTimeoutMs || 120000
-      let timer: NodeJS.Timeout | undefined
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           terminateChild(`Graphify update timed out after ${timeoutMs}ms`)
         }, timeoutMs)
       }
 
-      const onAbort = () => {
-        terminateChild('Graphify update cancelled by signal')
-      }
-      signal?.addEventListener('abort', onAbort, { once: true })
-
-      const terminateChild = (_reason: string) => {
-        if (isExited) return
-        terminateChildProcess(child as any, 1500)
-      }
+      let stdout = ''
+      let stderr = ''
 
       child.stdout?.on('data', (chunk: Buffer) => {
         stdout += chunk.toString('utf8')
@@ -1082,9 +1433,22 @@ export class ProjectUpdateCoalescer {
         if (stderr.length > 65536) stderr = stderr.slice(-65536)
       })
 
+      const finish = (result: UpdateResult) => {
+        if (timer) clearTimeout(timer)
+        this.activeRuns.delete(canonical)
+
+        for (const c of callers) {
+          if (c.onAbort && c.signal) {
+            c.signal.removeEventListener('abort', c.onAbort)
+          }
+          c.resolve(result)
+        }
+        callers.clear()
+      }
+
       child.once('error', (err) => {
         isExited = true
-        cleanupAndResolve({
+        finish({
           success: false,
           stdout,
           stderr,
@@ -1094,25 +1458,15 @@ export class ProjectUpdateCoalescer {
 
       child.once('close', (code, childSignal) => {
         isExited = true
-        if (signal?.aborted) {
-          cleanupAndResolve({
-            success: false,
-            stdout,
-            stderr,
-            error: 'Graphify update cancelled by signal',
-          })
-          return
-        }
-
         if (code === 0) {
-          cleanupAndResolve({
+          finish({
             success: true,
             stdout,
             stderr,
           })
         } else {
           const status = childSignal ? `signal ${childSignal}` : `code ${code ?? 'unknown'}`
-          cleanupAndResolve({
+          finish({
             success: false,
             stdout,
             stderr,

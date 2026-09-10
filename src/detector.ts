@@ -96,10 +96,11 @@ export function detectGraph(
 
 /**
  * Checks whether evidence exists binding an explicit graph path to the calling session root.
+ * Only binds if resolvedGraphPath is physically contained within searchDir.
  */
 function isBoundToSearchDir(
   searchDir: string | undefined,
-  customGraphPath: string,
+  _customGraphPath: string,
   resolvedGraphPath: string
 ): boolean {
   if (!searchDir) return false
@@ -112,12 +113,7 @@ function isBoundToSearchDir(
     return false
   }
 
-  // Evidence 1: customGraphPath was explicitly relative to searchDir
-  if (!path.isAbsolute(customGraphPath)) {
-    return true
-  }
-
-  // Evidence 2: resolvedGraphPath is physically located inside searchDir
+  // Bound ONLY when resolvedGraphPath is physically located inside searchDir
   const rel = path.relative(resolvedSearchDir, resolvedGraphPath)
   if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
     return true

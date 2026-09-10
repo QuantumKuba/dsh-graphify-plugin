@@ -182,6 +182,11 @@ export interface GraphFreshnessInfo {
   readonly changedFilesSample?: string[]
   readonly lastIndexedTime?: string
   readonly strategy?: 'metadata' | 'git-heuristic' | 'filesystem-heuristic'
+  readonly metadataVersion?: number
+  readonly baselineAvailable?: boolean
+  readonly isCanonicalTarget?: boolean
+  readonly autoUpdateEligible?: boolean
+  readonly autoUpdateBlockReason?: string
 }
 
 /** Overall operational status of Graphify for a project/session. */

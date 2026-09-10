@@ -13,6 +13,9 @@ import {
   writeGraphifyIndexMetadata,
   readGraphifyIndexMetadata,
   checkFilesystemRecursiveFreshness,
+  evaluateAutoUpdateEligibility,
+  performPostUpdateValidation,
+  getChangedSourceInventory,
 } from '../src/freshness.ts'
 import type { ResolvedProject } from '../src/types.ts'
 
@@ -120,7 +123,7 @@ describe('Graph Freshness and Coalescing', () => {
       writeGraphifyIndexMetadata(tempDir, graphJson)
       const meta = readGraphifyIndexMetadata(tempDir)
       assert.ok(meta)
-      assert.equal(meta.version, 2)
+      assert.equal(meta.version, 3)
       assert.ok(Date.parse(meta.indexedAt) > 0)
       assert.ok(meta.graphMtimeMs > 0)
     } finally {
@@ -673,5 +676,429 @@ describe('Graph Freshness and Coalescing', () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
+  })
+
+  it('detects dirty .md indexed at B and reverted to HEAD A as STALE with auto-update blocked (no false-fresh)', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-md-revert-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'arch' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+
+    // HEAD contains architecture.md = A
+    fs.writeFileSync(path.join(tempDir, 'architecture.md'), '# Architecture A')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'commit A'], { cwd: tempDir })
+
+    // User edits architecture.md = B
+    fs.writeFileSync(path.join(tempDir, 'architecture.md'), '# Architecture B')
+
+    // Graphify indexes at dirty state B
+    writeGraphifyIndexMetadata(tempDir, graphJson)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      // At this point, working tree is B, indexed state is B -> FRESH
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // User now reverts architecture.md back to A (matching HEAD A on disk, but differing from graph B!)
+      fs.writeFileSync(path.join(tempDir, 'architecture.md'), '# Architecture A')
+
+      // MUST NOT be marked FRESH! Git diff against HEAD is empty, but baseline diff against indexed state B is dirty!
+      const freshness = checkGraphFreshness(project)
+      assert.equal(freshness.state, 'stale', 'Reverting dirty semantic file must be STALE')
+
+      // Auto-update must NOT run because architecture.md is a non-code semantic doc
+      const eligibility = evaluateAutoUpdateEligibility(project)
+      assert.equal(eligibility.kind, 'requires-full-refresh')
+      if (eligibility.kind === 'requires-full-refresh') {
+        assert.ok(eligibility.unsupportedSources.some((s) => s.path === 'architecture.md'))
+      }
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps dirty .ts indexed at B fresh when unchanged, and stale/eligible when modified or reverted', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-ts-dirty-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+
+    // HEAD contains app.ts = A
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const val = "A"')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'commit A'], { cwd: tempDir })
+
+    // User modifies app.ts = B
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const val = "B"')
+
+    // Graph indexed with dirty app.ts = B
+    writeGraphifyIndexMetadata(tempDir, graphJson)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      // 1. Unchanged after indexing -> remains FRESH
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // 2. Changed to C -> STALE and eligible for code-only incremental update
+      fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const val = "C"')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+      const eligC = evaluateAutoUpdateEligibility(project)
+      assert.equal(eligC.kind, 'eligible')
+
+      // 3. Reverted to HEAD A -> STALE and eligible for code-only incremental update
+      fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const val = "A"')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+      const eligA = evaluateAutoUpdateEligibility(project)
+      assert.equal(eligA.kind, 'eligible')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects dirty .md indexed at B and modified to C as STALE requiring full refresh', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-md-mod-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'doc' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+
+    fs.writeFileSync(path.join(tempDir, 'doc.md'), 'version A')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'commit A'], { cwd: tempDir })
+
+    fs.writeFileSync(path.join(tempDir, 'doc.md'), 'version B')
+    writeGraphifyIndexMetadata(tempDir, graphJson)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      fs.writeFileSync(path.join(tempDir, 'doc.md'), 'version C')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+      const elig = evaluateAutoUpdateEligibility(project)
+      assert.equal(elig.kind, 'requires-full-refresh')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves freshness for untracked files when unchanged, and detects changes/deletions accurately', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-untracked-flow-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: '1' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'tracked.ts'), 'export const x = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Untracked ts and untracked md
+    fs.writeFileSync(path.join(tempDir, 'untracked.ts'), 'export const u = 1')
+    fs.writeFileSync(path.join(tempDir, 'untracked.md'), '# Notes')
+
+    writeGraphifyIndexMetadata(tempDir, graphJson)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      // 1. Unchanged untracked files -> FRESH
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // 2. Modifying untracked .ts -> STALE, eligible
+      fs.writeFileSync(path.join(tempDir, 'untracked.ts'), 'export const u = 2')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+      const eligTs = evaluateAutoUpdateEligibility(project)
+      assert.equal(eligTs.kind, 'eligible')
+
+      // Restore untracked.ts
+      fs.writeFileSync(path.join(tempDir, 'untracked.ts'), 'export const u = 1')
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // 3. Deleting untracked .md -> STALE, requires full refresh (cannot AST-update deleted doc)
+      fs.unlinkSync(path.join(tempDir, 'untracked.md'))
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+      const eligDel = evaluateAutoUpdateEligibility(project)
+      assert.equal(eligDel.kind, 'requires-full-refresh')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('tracks deleted files at index time and detects when they are restored or modified', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-deletion-flow-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'deleted-later.ts'), 'export const d = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Delete file on disk before indexing
+    fs.unlinkSync(path.join(tempDir, 'deleted-later.ts'))
+
+    // Index metadata records deletion state
+    writeGraphifyIndexMetadata(tempDir, graphJson)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      // While deleted, working tree matches indexed state -> FRESH
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // Restoring file on disk -> STALE
+      fs.writeFileSync(path.join(tempDir, 'deleted-later.ts'), 'export const d = 1')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('handles filenames containing spaces, unicode, and special characters safely', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-unicode-filenames-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+
+    const spaceFile = 'my file with spaces.ts'
+    const unicodeFile = 'módulo-🚀-test.ts'
+    fs.writeFileSync(path.join(tempDir, spaceFile), 'export const s = 1')
+    fs.writeFileSync(path.join(tempDir, unicodeFile), 'export const u = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Modify both in working tree
+    fs.writeFileSync(path.join(tempDir, spaceFile), 'export const s = 2')
+    fs.writeFileSync(path.join(tempDir, unicodeFile), 'export const u = 2')
+
+    writeGraphifyIndexMetadata(tempDir, graphJson)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // Modify one file
+      fs.writeFileSync(path.join(tempDir, spaceFile), 'export const s = 3')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+
+      const inventory = getChangedSourceInventory(tempDir, readGraphifyIndexMetadata(tempDir, graphJson), graphJson)
+      assert.equal(inventory.complete, true)
+      assert.ok(inventory.files.some((f) => f.path === spaceFile))
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('legacy metadata and missing metadata fail safe and refuse to bootstrap to FRESH via auto-update', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-legacy-safe-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'guide.md'), '# Initial')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      // 1. No metadata present at all: eligibility must be 'unknown'
+      const noMetaElig = evaluateAutoUpdateEligibility(project)
+      assert.equal(noMetaElig.kind, 'unknown')
+      assert.match(noMetaElig.reason, /run a full graph rebuild/i)
+
+      // 2. v1 metadata present: eligibility must be 'unknown'
+      const metaPath = path.join(graphDir, '.dsh-graphify-index.json')
+      fs.writeFileSync(
+        metaPath,
+        JSON.stringify({
+          version: 1,
+          indexedAt: new Date().toISOString(),
+          graphPath: graphJson,
+          graphMtimeMs: Date.now(),
+          git: { head: 'aaa', tree: 'bbb' },
+        })
+      )
+      const v1Elig = evaluateAutoUpdateEligibility(project)
+      assert.equal(v1Elig.kind, 'unknown')
+      assert.match(v1Elig.reason, /predates source-state tracking/i)
+
+      // 3. v2 metadata present: eligibility must be 'unknown'
+      fs.writeFileSync(
+        metaPath,
+        JSON.stringify({
+          version: 2,
+          indexedAt: new Date().toISOString(),
+          graphPath: graphJson,
+          graphMtimeMs: Date.now(),
+          git: { head: 'aaa', tree: 'bbb', workingTreeFingerprint: 'v2-fp' },
+        })
+      )
+      const v2Elig = evaluateAutoUpdateEligibility(project)
+      assert.equal(v2Elig.kind, 'unknown')
+      assert.match(v2Elig.reason, /predates source-state tracking/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('post-update validation rejects non-Graphify JSON and accepts coherent Graphify graphs', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-val-test-'))
+    const graphJson = path.join(tempDir, 'graph.json')
+
+    try {
+      // 1. Non-existent file
+      assert.equal(performPostUpdateValidation(tempDir, path.join(tempDir, 'nonexistent.json')), false)
+
+      // 2. Empty file
+      fs.writeFileSync(graphJson, '')
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), false)
+
+      // 3. Empty object {}
+      fs.writeFileSync(graphJson, '{}')
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), false)
+
+      // 4. Random parseable JSON
+      fs.writeFileSync(graphJson, JSON.stringify({ hello: 'world' }))
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), false)
+
+      // 5. Array instead of object
+      fs.writeFileSync(graphJson, JSON.stringify([1, 2, 3]))
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), false)
+
+      // 6. Object with nodes that is not an array
+      fs.writeFileSync(graphJson, JSON.stringify({ nodes: 'not-array', links: [] }))
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), false)
+
+      // 7. Object with nodes array but neither links nor edges array
+      fs.writeFileSync(graphJson, JSON.stringify({ nodes: [], somethingElse: true }))
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), false)
+
+      // 8. Valid Graphify graph with nodes and links
+      fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: '1' }], links: [] }))
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), true)
+
+      // 9. Valid Graphify graph with nodes and edges
+      fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: '1' }], edges: [] }))
+      assert.equal(performPostUpdateValidation(tempDir, graphJson), true)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('coalescer isolates caller-level cancellation so aborting caller A does not kill update for caller B', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-coalesce-caller-'))
+    const graphJson = path.join(tempDir, 'graphify-out', 'graph.json')
+
+    const fakeChild = new EventEmitter() as any
+    fakeChild.stdout = new EventEmitter()
+    fakeChild.stderr = new EventEmitter()
+    fakeChild.kill = () => {}
+
+    const customSpawn = () => fakeChild
+    const coalescer = new ProjectUpdateCoalescer({ spawn: customSpawn as any })
+    const config = Config({})
+
+    const controllerA = new AbortController()
+    const controllerB = new AbortController()
+
+    // Caller A starts update
+    const promiseA = coalescer.update(config, tempDir, controllerA.signal, graphJson)
+
+    // Caller B coalesces on same update
+    const promiseB = coalescer.update(config, tempDir, controllerB.signal, graphJson)
+
+    // Caller A aborts
+    controllerA.abort()
+
+    const resA = await promiseA
+    assert.equal(resA.success, false)
+    assert.match(resA.error || '', /cancelled by signal/i)
+
+    // Child finishes successfully for caller B
+    fakeChild.emit('close', 0, null)
+
+    const resB = await promiseB
+    assert.equal(resB.success, true)
+
+    fs.rmSync(tempDir, { recursive: true, force: true })
   })
 })

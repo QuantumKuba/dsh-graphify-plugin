@@ -157,6 +157,24 @@ describe('Multi-Project Resource Isolation', () => {
       const dirRes = await resourceTool.execute({ resource: 'wiki' }, execContext)
       assert.equal(dirRes.isError, true)
       assert.match(dirRes.text, /not a regular file/i)
+
+      // 4. Stats resource: symlinked graph.json escaping graphDir boundary
+      const outsideGraph = path.join(tempDir, 'outside-graph.json')
+      fs.writeFileSync(outsideGraph, JSON.stringify({ nodes: [1, 2], links: [] }))
+      fs.unlinkSync(path.join(graphDir, 'graph.json'))
+      fs.symlinkSync(outsideGraph, path.join(graphDir, 'graph.json'))
+
+      const statsEscapeRes = await resourceTool.execute({ resource: 'stats' }, execContext)
+      assert.equal(statsEscapeRes.isError, true)
+      assert.match(statsEscapeRes.text, /escapes graph directory boundary/i)
+
+      // 5. Stats resource: non-regular file (graph.json is a directory)
+      fs.unlinkSync(path.join(graphDir, 'graph.json'))
+      fs.mkdirSync(path.join(graphDir, 'graph.json'))
+
+      const statsDirRes = await resourceTool.execute({ resource: 'stats' }, execContext)
+      assert.equal(statsDirRes.isError, true)
+      assert.match(statsDirRes.text, /not a regular file/i)
     } finally {
       await client.dispose()
       fs.rmSync(tempDir, { recursive: true, force: true })

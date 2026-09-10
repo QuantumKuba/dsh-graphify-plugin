@@ -158,11 +158,20 @@ export class ProjectResolver {
 
     try {
       const stat = fs.statSync(project.graphJsonPath)
-      return stat.mtimeMs === project.mtimeMs
+      if (stat.mtimeMs !== project.mtimeMs) return false
     } catch {
       // File deleted or inaccessible
       return false
     }
+
+    // Verify report/wiki presence has not changed
+    const candidateReport = path.join(project.graphDir, 'GRAPH_REPORT.md')
+    if (fs.existsSync(candidateReport) !== Boolean(project.reportPath)) return false
+
+    const candidateWiki = path.join(project.graphDir, 'wiki', 'index.md')
+    if (fs.existsSync(candidateWiki) !== Boolean(project.wikiIndexPath)) return false
+
+    return true
   }
 
   /**
@@ -171,7 +180,15 @@ export class ProjectResolver {
   invalidate(targetDir?: string): void {
     if (targetDir) {
       const canonical = path.resolve(targetDir)
-      this.cache.delete(canonical)
+      for (const [key, entry] of this.cache.entries()) {
+        if (
+          key === canonical ||
+          entry.project.projectRoot === canonical ||
+          entry.project.graphDir === canonical
+        ) {
+          this.cache.delete(key)
+        }
+      }
     } else {
       this.cache.clear()
     }

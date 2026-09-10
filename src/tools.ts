@@ -121,19 +121,25 @@ export function createGraphifyToolDefinitions(
             const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal, project.graphJsonPath)
             if (updateRes.success) {
               if (project.graphJsonPath && performPostUpdateValidation(project.projectRoot, project.graphJsonPath)) {
-                writeGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
-                resolver.invalidate(project.projectRoot)
-                // Re-resolve project and refresh metadata after update
-                project = resolver.resolve({
-                  explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
-                  toolContext: execution,
-                })
-                if (!args.project_path) {
-                  args.project_path = project.projectRoot
-                }
-                const postFreshness = checkGraphFreshness(project)
-                if (postFreshness.state === 'stale') {
-                  stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
+                // Re-verify that no unsupported sources were introduced concurrently during update
+                const postEligibility = evaluateAutoUpdateEligibility(project)
+                if (postEligibility.kind === 'eligible') {
+                  writeGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
+                  resolver.invalidate(project.projectRoot)
+                  // Re-resolve project and refresh metadata after update
+                  project = resolver.resolve({
+                    explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
+                    toolContext: execution,
+                  })
+                  if (!args.project_path) {
+                    args.project_path = project.projectRoot
+                  }
+                  const postFreshness = checkGraphFreshness(project)
+                  if (postFreshness.state === 'stale') {
+                    stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
+                  }
+                } else {
+                  stalenessNotice = `[Notice: Non-code source changes detected during update. Graph remains stale. Real source files remain authoritative.]\n\n`
                 }
               } else {
                 stalenessNotice = `[Notice: Post-update validation failed for graph.json. Graph may be incomplete or invalid.]\n\n`
@@ -475,15 +481,32 @@ export function createGraphifyToolDefinitions(
               fallbackMessage = 'wiki/index.md not found. The graph may not include a wiki.'
               break
             case 'stats': {
-              // Read graph.json directly for stats summary
+              // Read graph.json directly for stats summary with symlink containment check
               if (!project.graphJsonPath || !fs.existsSync(project.graphJsonPath)) {
                 return { text: 'graph.json not found.', isError: true }
               }
-              const stat = fs.statSync(project.graphJsonPath)
+              let realGraphDir: string
+              let realGraphFile: string
+              try {
+                realGraphDir = fs.realpathSync(path.resolve(project.graphDir))
+                realGraphFile = fs.realpathSync(path.resolve(project.graphJsonPath))
+              } catch {
+                return { text: 'graph.json not found or inaccessible.', isError: true }
+              }
+
+              const rel = path.relative(realGraphDir, realGraphFile)
+              if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+                return { text: 'Resource path escapes graph directory boundary.', isError: true }
+              }
+
+              const stat = fs.statSync(realGraphFile)
+              if (!stat.isFile()) {
+                return { text: 'Resource path is not a regular file.', isError: true }
+              }
               if (stat.size > 50 * 1024 * 1024) {
                 return { text: `graph.json is ${Math.round(stat.size / 1024 / 1024)}MB; too large for inline stats.`, isError: true }
               }
-              const raw = fs.readFileSync(project.graphJsonPath, 'utf8')
+              const raw = fs.readFileSync(realGraphFile, 'utf8')
               const data = JSON.parse(raw) as { nodes?: unknown[]; links?: unknown[]; edges?: unknown[] }
               const nodeCount = Array.isArray(data.nodes) ? data.nodes.length : 0
               const edgeCount = Array.isArray(data.links) ? data.links.length : Array.isArray(data.edges) ? data.edges.length : 0

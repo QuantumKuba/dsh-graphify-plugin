@@ -190,6 +190,19 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
     lines.push(`  Inspection Strategy: ${status.freshness.strategy}`)
   }
 
+  if (status.freshness.metadataVersion !== undefined) {
+    const baselineStr = status.freshness.baselineAvailable ? 'per-path baseline available' : 'legacy baseline (requires full rebuild)'
+    lines.push(`  Metadata: v${status.freshness.metadataVersion} (${baselineStr})`)
+  }
+
+  if (status.freshness.isCanonicalTarget === false) {
+    lines.push('  Target: Custom non-canonical graph path')
+  }
+
+  if (status.freshness.autoUpdateBlockReason) {
+    lines.push(`  Auto-Update Blocked: ${status.freshness.autoUpdateBlockReason}`)
+  }
+
   if (status.freshness.changedFilesSample && status.freshness.changedFilesSample.length > 0) {
     lines.push(`  Changed files: ${status.freshness.changedFilesSample.join(', ')}${(status.freshness.changedFilesCount ?? 0) > 5 ? ' ...' : ''}`)
   }
@@ -218,9 +231,15 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
   if (status.overall === 'healthy') {
     lines.push('Graph is verified, connected, and ready for architectural and dependency queries.')
   } else if (status.overall === 'stale') {
-    lines.push('Recommendation: Graph is stale. Run `/graphify update` or `graphify update .` to sync recent code modifications into the graph.')
+    if (status.freshness.baselineAvailable === false) {
+      lines.push('Recommendation: Graph is stale; freshness metadata predates source-state tracking. Run a full Graphify build (`/graphify build` or `graphify .`) to establish a trustworthy baseline.')
+    } else if (status.freshness.autoUpdateEligible === false) {
+      lines.push('Recommendation: Graph is stale with unsupported changes. Run a full Graphify build (`/graphify build` or `graphify .`) to refresh all source and semantic entities.')
+    } else {
+      lines.push('Recommendation: Graph is stale. Run `/graphify update` or `graphify update .` to sync recent code modifications into the graph.')
+    }
   } else if (status.overall === 'missing') {
-    lines.push('Recommendation: Graph is missing. Run `/graphify` or `graphify .` in the project root to generate the knowledge graph.')
+    lines.push('Recommendation: Graph is missing. Run `/graphify build` or `graphify .` in the project root to generate the knowledge graph.')
   } else if (status.overall === 'unprobed') {
     lines.push('Recommendation: MCP server has not been probed yet. Execute a query tool or probe connectivity to verify health.')
   } else if (status.overall === 'error') {
@@ -232,7 +251,7 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
       lines.push('Recommendation: Graphify runtime is unavailable. Verify installation with `uv tool install "graphifyy[mcp]"` or configure `command` in cordis.yml.')
     }
   } else {
-    lines.push('Recommendation: Graph state is unknown. Inspect graphify-out/ and run `/graphify` if needed.')
+    lines.push('Recommendation: Graph state is unknown. Inspect graphify-out/ and run `/graphify build` if needed.')
   }
 
   return lines.join('\n')

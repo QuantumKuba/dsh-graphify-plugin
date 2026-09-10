@@ -9,11 +9,11 @@ Built on the official `@modelcontextprotocol/sdk` stdio transport, `dsh-graphify
 ## Key Features
 
 - **MCP Transport via `@modelcontextprotocol/sdk`**: Replaces ad-hoc JSON-RPC with the official SDK client and stdio transport. Features generation tracking against zombie processes, bounded exponential backoff reconnection, stderr ring-buffer captures (up to 50 chunks / 64 KiB), and cooperative `AbortSignal` cancellation.
-- **DeepSeek Harness & Cordis Native**: Compatible with newest DeepSeek Harness releases (`dsh-session >=0.1.1-rc.2` through `0.1.5-alpha.2` / `0.1.2-rc.1`, Cordis `^4.0.1` / `4.0.2`). Native lifecycle hooks (`ctx.effect()`), session-scoped context resolution, and durable Web UI companion cards.
+- **DeepSeek Harness & Cordis Native**: Built for DeepSeek Harness environments with declared peer dependency ranges (`dsh-session >=0.1.1-rc.2`, Cordis `>=4.0.0`). CI tests the supported baseline, while scheduled compatibility workflows test current upstream releases. Native lifecycle hooks (`ctx.effect()`), session-scoped context resolution, and durable Web UI companion cards.
 - **Optimized for 20B–30B Local LLMs**: Offers `toolMode: 'compact'` exposing 6 high-signal tools with curated descriptions and schema-constrained parameters to eliminate hallucinated tool choices and preserve context window budget.
 - **Session-Scoped Multi-Workspace Resolution**: Resolves project paths dynamically from DSH session context (`toolContext.agent.session.header.cwd`), ancestor graph detection, or configured overrides—enabling a single DSH instance to serve multiple workspaces safely.
-- **Graph Freshness & Concurrency-Safe Updates**: Git- and mtime-based graph staleness detection with configurable warning (`freshness: { mode: 'warn' }`) or automatic deduplicated incremental updating (`freshness: { mode: 'auto' }`) via `ProjectUpdateCoalescer`.
-- **Diagnostic Doctor Tool (`graphify_status`)**: Environment diagnostic inspection for models and developers, reporting runtime resolution, connection states, project paths, staleness metrics, and actionable remediation advice.
+- **Graph Freshness & Concurrency-Safe Updates**: Git- and mtime-based graph staleness detection with durable v3 per-path baseline tracking, configurable warning (`freshness: { mode: 'warn' }`), and automatic deduplicated incremental updating (`freshness: { mode: 'auto' }`) via `ProjectUpdateCoalescer`.
+- **Diagnostic Doctor Tool (`graphify_status`)**: Environment diagnostic inspection for models and developers, reporting runtime resolution, connection states, project paths, staleness metrics, baseline availability, and actionable remediation advice.
 - **Decision Policy Prompting**: Injects high-agency navigation rules into the agent loop, teaching models when to use Graphify vs. grep/filesystem tools, and enforcing the authoritative verification loop (Graphify -> source files -> editor -> tests -> update).
 
 ---
@@ -68,7 +68,7 @@ Registers the 6 essential tools that handle 95% of agent code navigation:
 
 | Tool | Purpose |
 | --- | --- |
-| `graphify_status` | Doctor tool checking graph freshness, runtime status, and project path. |
+| `graphify_status` | Doctor tool checking graph freshness, runtime status, baseline availability, and project path. |
 | `query_graph` | BFS/DFS traversal over the knowledge graph around an entry node or query. |
 | `get_node` | Deep inspection of a specific symbol (AST type, file location, docstring, community). |
 | `get_neighbors` | Inspection of direct dependencies and dependents connected to a node. |
@@ -95,6 +95,7 @@ Graphify Status: HEALTHY
 • Last Indexed: 2026-09-10T00:15:30.000Z
 • Graph Freshness: FRESH - Graph matches current Git HEAD and working tree fingerprint
   Inspection Strategy: metadata
+  Metadata Version: 3 (baseline: available, canonical target: yes)
 • Git Repository: commit a1b2c3d (main), clean
 • Runtime: /usr/local/bin/graphify-mcp [installed]
 • MCP State: connected
@@ -102,21 +103,24 @@ Graphify Status: HEALTHY
 Graph is verified, connected, and ready for architectural and dependency queries.
 ```
 
-When issues are detected (e.g., missing runtime, missing graph, or stale files), `graphify_status` provides explicit remediation warnings guiding the agent to run `/graphify` or update the graph.
+When issues are detected (e.g., missing runtime, missing graph, legacy metadata baseline, or stale files), `graphify_status` provides explicit remediation warnings guiding the agent to run `/graphify build` or update the graph.
 
 ---
 
 ## Graph Freshness & Concurrency-Safe Updates
 
-Out-of-date graphs cause agents to hallucinate non-existent symbols or miss refactored dependencies. `dsh-graphify` tracks graph freshness via durable index metadata (`.dsh-graphify-index.json`), git branch/HEAD comparisons, and recursive file modification walks:
+Out-of-date graphs cause agents to hallucinate non-existent symbols or miss refactored dependencies. `dsh-graphify` tracks graph freshness via durable v3 index metadata (`.dsh-graphify-index.json`), git branch/HEAD comparisons, per-path dirty-state tracking, and recursive file modification walks:
 
-- **`freshness: { mode: 'warn' }` (Default)**: Injects an actionable warning into tool responses when git commits or file modifications occurred after the graph was last built.
-- **`freshness: { mode: 'auto', updateTimeoutMs: 120000 }`**: Automatically triggers a coalesced pre-query incremental graph update via `ProjectUpdateCoalescer` before executing tools when staleness is detected. The process lock is held until child process termination, preventing duplicate jobs and race conditions across concurrent sessions.
-  - **All-or-Nothing Auto-Update Policy**: `graphify update` incrementally extracts core code files with built-in AST extractors (`.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`, `.java`, `.cpp`, `.c`, `.cs`, `.rb`, `.kt`, `.swift`, `.php`, `.lua`, `.zig`, `.sh`). If any non-code file (such as `.md` docs, `package.json`, `pyproject.toml`, or configuration files) has changed, auto-update is skipped, the graph remains stale, and an actionable notice is returned guiding the user to run a full refresh (`/graphify update . --force` or `/graphify build`).
+- **Durable v3 Metadata Baseline**: Captures an indexed working-tree baseline storing content hashes for dirty tracked files, untracked files, and deletions at graph-index time. This ensures indexing from a dirty working tree is safe: reverting or modifying a dirty file later is tracked with path-specific precision, strictly preventing false-fresh graph states.
+- **`freshness: { mode: 'warn' }` (Default)**: Injects an actionable warning into tool responses when git commits or file modifications occurred after the graph was last indexed.
+- **`freshness: { mode: 'auto', updateTimeoutMs: 120000 }`**: Automatically triggers a coalesced pre-query incremental graph update via `ProjectUpdateCoalescer` before executing tools when staleness is detected. The process lock is held until child process termination, preventing duplicate jobs and race conditions across concurrent sessions. Individual caller abort signals are isolated so one cancellation does not disrupt coalesced operations.
+  - **Conservative Code-Only Policy**: `graphify update` incrementally extracts core code files with built-in AST extractors (`.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.rs`, `.java`, `.cpp`, `.c`, `.cs`, `.rb`, `.kt`, `.swift`, `.php`, `.lua`, `.zig`, `.sh`). If any non-code file (such as `.md` docs, `package.json`, `pyproject.toml`, or configuration files) has changed, auto-update is refused, the graph remains stale, and an actionable notice is returned guiding the user to run a full rebuild (`/graphify build` or `graphify .`).
+  - **Safe Checkpoint Semantics**: Incremental updates only advance the freshness checkpoint if all detected changes since the prior baseline are proven AST code changes. If semantic documents or unproven files changed, the incremental update command completes but the graph remains stale. A full build (`/graphify build`) establishes a new trustworthy v3 baseline representing the entire source corpus.
+  - **Legacy & Missing Metadata Handling**: Graphs with legacy (v1/v2) or missing metadata cannot prove which source files changed since indexing. In these cases, auto-update will not bootstrap an unverified graph to FRESH; instead, it requires a full rebuild to establish a trustworthy v3 baseline.
   - **Canonical Target Requirement**: `graphify update` exclusively updates the canonical `<projectRoot>/graphify-out/graph.json`. Explicit or custom `graphPath` targets cannot be updated incrementally; they require a full build or rebuild.
 - **`freshness: { mode: 'off' }`**: Disables freshness evaluation for airgapped or static environments.
 
-In monorepos and subprojects, git status and diff checks are scoped to the resolved project root (`-- .`), ensuring only changes within the active workspace affect freshness evaluation. Git staging state (`git add` / `git reset`) is excluded from working-tree fingerprinting, ensuring freshness reflects actual working tree bytes rather than index staging state.
+In monorepos and subprojects, git status and diff checks are scoped to the resolved project root (`-- .`), ensuring only changes within the active workspace affect freshness evaluation. Staging state (`git add` / `git reset`) is irrelevant to freshness: working-tree file bytes are source truth, guaranteeing that staging or unstaging identical bytes never marks a fresh graph stale or a stale graph fresh.
 
 ---
 
@@ -125,13 +129,16 @@ In monorepos and subprojects, git status and diff checks are scoped to the resol
 In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides direct human control to build or update graphs. In DSH Web, durable result cards are displayed and persist across reloads from session events.
 
 ```text
-/graphify                         # build the receiving session’s project
-/graphify build ../another-repo   # build a specific path
-/graphify update                  # incrementally rebuild modified files
-/graphify update . --force        # force full graph re-indexing
+/graphify                         # full build of the receiving session’s project (semantic + code)
+/graphify build ../another-repo   # full build of a specific project directory
+/graphify update                  # incrementally rebuild modified AST/code files
+/graphify update . --force        # bypass node count shrink guard during code update
 /graphify update . --code-only    # AST-only indexing without LLM credits
 /graphify update . --no-viz       # suppress HTML visualization generation
 ```
+
+> [!NOTE]
+> In upstream Graphify, `graphify update` is strictly an incremental AST/code re-extraction (`_rebuild_code()`). The `--force` flag bypasses the node count shrink safety guard; it does *not* semantically re-ingest markdown documents. Full semantic documentation indexing requires a full build (`/graphify build` or `graphify .`), which may invoke configured LLM extraction.
 
 ---
 
@@ -168,6 +175,7 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 - **DSH Session & Core**: Supports `@deepseek-ai/dsh-session` `>=0.1.1-rc.2`.
 - **DSH Commands**: Supports `@deepseek-ai/dsh-commands` `>=0.1.1-rc.2`.
 - **DSH Client UI & Locale**: Supports `@deepseek-ai/dsh-client-locale` and `@deepseek-ai/dsh-client-ui-conversation` `>=0.1.1-rc.2`.
+- **Continuous Compatibility**: CI tests the supported baseline on Node 22/24 across Ubuntu and macOS. A scheduled compatibility workflow runs weekly against upstream `@next` and `@alpha` channels to proactively verify package compatibility.
 - **Contract Drift Detection**: Automated schema drift tests (`pnpm run test:drift`) prevent breaking changes between Graphify MCP schemas and plugin definitions.
 
 ---

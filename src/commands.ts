@@ -4,7 +4,13 @@ import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
 import { resolveGraphifyCliCommand, terminateChildProcess } from './server-process.ts'
-import { writeGraphifyIndexMetadata } from './freshness.ts'
+import {
+  readGraphifyIndexMetadata,
+  writeGraphifyIndexMetadata,
+  performPostUpdateValidation,
+  getChangedSourceInventory,
+  isSafeChange,
+} from './freshness.ts'
 
 export interface CommandInvocation {
   commandId?: unknown
@@ -128,16 +134,91 @@ export function registerGraphifyCommand(
         const projectRoot = invocation.agent.session.header.cwd || defaultProjectRoot
         const request = parseGraphifyCommand(invocation.rawInput, projectRoot)
         const { command, args } = resolveGraphifyCliCommand(config, request)
-        const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
-        try {
-          const canonicalGraphJson = path.join(request.projectRoot, 'graphify-out', 'graph.json')
-          if (fs.existsSync(canonicalGraphJson)) {
-            writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+        const canonicalGraphJson = path.join(request.projectRoot, 'graphify-out', 'graph.json')
+
+        if (request.operation === 'build') {
+          const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
+          if (performPostUpdateValidation(request.projectRoot, canonicalGraphJson)) {
+            try {
+              writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+            } catch {
+              // Metadata recording failure ignored
+            }
+            return { kind: 'success', text }
+          } else {
+            return {
+              kind: 'success',
+              text: `${text}\n\nWarning: Post-build validation failed for graph.json. Freshness metadata was not recorded.`,
+            }
           }
-        } catch {
-          // Metadata recording failure ignored
         }
-        return { kind: 'success', text }
+
+        // Incremental update (/graphify update)
+        const priorMeta = readGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+        let eligibleForCheckpoint = false
+        let checkpointBlockReason = ''
+
+        const isTrustworthyV3 =
+          priorMeta !== null &&
+          priorMeta.version === 3 &&
+          priorMeta.git !== undefined &&
+          priorMeta.git.indexedPaths !== undefined
+
+        if (!isTrustworthyV3) {
+          eligibleForCheckpoint = false
+          checkpointBlockReason =
+            'Freshness metadata predates source-state tracking. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to establish a trustworthy freshness baseline.'
+        } else {
+          const inventory = getChangedSourceInventory(request.projectRoot, priorMeta, canonicalGraphJson)
+          if (!inventory.complete) {
+            eligibleForCheckpoint = false
+            checkpointBlockReason =
+              inventory.reason ||
+              'Source state relative to indexed graph baseline could not be safely verified. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to make the graph fully current.'
+          } else {
+            const unsupportedSources = inventory.files.filter((f) => !isSafeChange(f))
+            if (unsupportedSources.length > 0) {
+              eligibleForCheckpoint = false
+              checkpointBlockReason =
+                'Semantic or unsupported source changes were detected. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to make the graph fully current.'
+            } else {
+              eligibleForCheckpoint = true
+            }
+          }
+        }
+
+        const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
+
+        if (eligibleForCheckpoint) {
+          if (performPostUpdateValidation(request.projectRoot, canonicalGraphJson)) {
+            // Re-verify that no unsupported sources were introduced concurrently during the update
+            const postInventory = getChangedSourceInventory(request.projectRoot, priorMeta, canonicalGraphJson)
+            const postUnsupported = postInventory.complete ? postInventory.files.filter((f) => !isSafeChange(f)) : []
+            if (postInventory.complete && postUnsupported.length === 0) {
+              try {
+                writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+              } catch {
+                // Ignore metadata recording failure
+              }
+              return { kind: 'success', text }
+            } else {
+              return {
+                kind: 'success',
+                text: `${text}\n\nNote: Graphify incremental update completed, but source state changed during update. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to make the graph fully current.`,
+              }
+            }
+          } else {
+            return {
+              kind: 'success',
+              text: `${text}\n\nWarning: Post-update validation failed for graph.json. Freshness metadata was not recorded.`,
+            }
+          }
+        } else {
+          return {
+            kind: 'success',
+            text: `${text}\n\nNote: Graphify incremental update completed, but ${checkpointBlockReason}`,
+          }
+        }
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error)
         return { kind: 'error', text: `Graphify failed: ${text}` }
