@@ -448,6 +448,7 @@ describe('Graph Freshness and Coalescing', () => {
 
     const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tempDir, encoding: 'utf8' }).stdout.trim()
     const tree = spawnSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: tempDir, encoding: 'utf8' }).stdout.trim()
+    const branch = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tempDir, encoding: 'utf8' }).stdout.trim()
 
     // Manually write v1 metadata (no workingTreeFingerprint)
     const v1Meta = {
@@ -458,7 +459,7 @@ describe('Graph Freshness and Coalescing', () => {
       git: {
         head,
         tree,
-        branch: 'main',
+        branch,
       },
     }
     fs.writeFileSync(path.join(graphDir, '.dsh-graphify-index.json'), JSON.stringify(v1Meta, null, 2))
