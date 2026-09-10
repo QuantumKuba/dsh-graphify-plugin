@@ -116,19 +116,15 @@ export async function collectGraphifyStatus(
     // Git not available or not a git repository
   }
 
-  // 3. Compute overall status with strict semantic guarantees
+  // 3. Compute overall status with strict semantic guarantees.
+  // Active MCP connection is stronger evidence than runtime.source; a connected
+  // server is reachable regardless of how its binary was resolved.
   let overall: GraphifyOverallStatus = 'unknown'
 
   if (mcpState === 'error') {
     overall = 'error'
   } else if (!project.hasGraph) {
     overall = 'missing'
-  } else if (runtime.source === 'unknown') {
-    overall = 'unavailable'
-  } else if (mcpState === 'disconnected') {
-    overall = 'unprobed'
-  } else if (mcpState === 'connecting' || mcpState === 'reconnecting') {
-    overall = 'unavailable'
   } else if (mcpState === 'connected') {
     if (freshness.state === 'stale') {
       overall = 'stale'
@@ -137,6 +133,10 @@ export async function collectGraphifyStatus(
     } else {
       overall = 'unknown'
     }
+  } else if (mcpState === 'disconnected') {
+    overall = runtime.source === 'unknown' ? 'unavailable' : 'unprobed'
+  } else if (mcpState === 'connecting' || mcpState === 'reconnecting') {
+    overall = 'unavailable'
   }
 
   return {
@@ -153,6 +153,8 @@ export async function collectGraphifyStatus(
     runtime,
     mcp: {
       state: mcpState,
+      reconnectAttempts: client.getReconnectAttempts(),
+      maxReconnectAttempts: client.getMaxReconnectAttempts(),
       recentStderr: recentStderr || undefined,
     },
   }
@@ -199,7 +201,10 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
   }
 
   lines.push(`• Runtime: ${status.runtime.command} [${status.runtime.source}]`)
-  lines.push(`• MCP State: ${status.mcp.state}`)
+  const reconnectInfo = status.mcp.state === 'reconnecting'
+    ? ` (attempt ${status.mcp.reconnectAttempts}/${status.mcp.maxReconnectAttempts})`
+    : ''
+  lines.push(`• MCP State: ${status.mcp.state}${reconnectInfo}`)
 
   if (status.mcp.recentStderr) {
     const trimmed = status.mcp.recentStderr.trim()

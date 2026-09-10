@@ -38,6 +38,16 @@ export interface ServerExitInfo {
  *
  * Implements bounded exponential backoff reconnection, generational subprocess safety,
  * cooperative cancellation, request timeouts, and diagnostic stderr buffering.
+ *
+ * Reconnect state machine:
+ *   unexpected disconnect → attempt = 1 → wait backoff → connect
+ *     ├── success → connected → reset retry counter after stable period
+ *     └── failure → attempts < maxAttempts?
+ *           ├── yes → schedule another reconnect (increment attempt)
+ *           └── no → final error state, no further automatic attempts
+ *
+ * A failed reconnect handshake schedules the next retry if budget remains.
+ * An explicit `init()` failure (first connection) throws to the caller without retry.
  */
 export class GraphifyMcpClient {
   private client: Client | null = null
@@ -84,6 +94,16 @@ export class GraphifyMcpClient {
     return this.state
   }
 
+  /** Current reconnect attempt number (0 when connected or not reconnecting). */
+  getReconnectAttempts(): number {
+    return this.reconnectAttempts
+  }
+
+  /** Maximum reconnect attempts configured. */
+  getMaxReconnectAttempts(): number {
+    return this.reconnectConfig.maxAttempts
+  }
+
   /** Register a callback for connection state changes. */
   onConnectionStateChange(listener: (state: McpConnectionState) => void): () => void {
     this.stateListeners.add(listener)
@@ -104,6 +124,9 @@ export class GraphifyMcpClient {
 
   /**
    * Initializes the MCP connection and completes protocol handshake using the official MCP SDK.
+   *
+   * This is the public entry point for explicit first-time connection. On failure, it throws
+   * to the caller without scheduling automatic retries. Use for initial handshakes only.
    */
   async init(): Promise<void> {
     if (this.isDisposed) {
@@ -119,6 +142,11 @@ export class GraphifyMcpClient {
     this.initPromise = this.establishConnection()
     try {
       await this.initPromise
+    } catch (err) {
+      if (!this.isDisposed) {
+        this.setState('error')
+      }
+      throw err
     } finally {
       this.initPromise = null
     }
@@ -131,7 +159,9 @@ export class GraphifyMcpClient {
     }
 
     const currentGeneration = ++this.generation
-    this.setState('connecting')
+    if (this.state !== 'reconnecting') {
+      this.setState('connecting')
+    }
     this.logger?.debug(`[dsh-graphify] Starting Graphify MCP server (gen ${currentGeneration}): ${this.command} ${this.args.join(' ')}`)
 
     // Clean up any stale transport
@@ -188,25 +218,6 @@ export class GraphifyMcpClient {
         },
         {
           capabilities: {},
-          listChanged: {
-            tools: {
-              onChanged: async (error, result) => {
-                if (error) {
-                  this.logger?.warn(`[dsh-graphify] Failed to refresh tools on list_changed: ${error.message}`)
-                  return
-                }
-                const rawTools = Array.isArray(result) ? result : (result as unknown as { tools?: unknown[] })?.tools
-                const tools = (rawTools || []) as McpToolInfo[]
-                for (const listener of this.toolsChangedListeners) {
-                  try {
-                    listener(tools)
-                  } catch {
-                    // Ignore listener errors
-                  }
-                }
-              },
-            },
-          },
         }
       )
 
@@ -234,25 +245,79 @@ export class GraphifyMcpClient {
         try {
           await client.close()
         } catch {
-          // Ignore
+          // Ignore close error on failed handshake
         }
       }
       if (transport) {
         try {
           await transport.close()
         } catch {
-          // Ignore
+          // Ignore close error on failed handshake
         }
       }
       this.client = null
       this.transport = null
 
       if (this.generation !== currentGeneration || this.isDisposed) return
-      this.setState('error')
       const msg = error instanceof Error ? error.message : String(error)
       this.logger?.error(`[dsh-graphify] Failed to connect to Graphify MCP: ${msg}\nRecent stderr: ${this.getRecentStderr()}`)
       throw new Error(`Failed to connect to Graphify MCP: ${msg}`)
     }
+  }
+
+  /**
+   * Attempts a single reconnection. On failure, schedules the next retry if budget remains.
+   * Never throws — reconnect failures are logged and retried, not propagated to callers.
+   *
+   * This is the internal reconnect path, distinct from `init()` which is the explicit
+   * caller-facing API that throws on failure.
+   */
+  private async reconnectAttempt(triggerGeneration: number): Promise<void> {
+    if (this.isDisposed || this.generation !== triggerGeneration) return
+
+    try {
+      await this.establishConnection()
+      // establishConnection succeeded — state is now 'connected'
+    } catch {
+      // establishConnection failed — state is now 'error'
+      // Schedule next retry if budget remains and we haven't been disposed/superseded
+      if (this.isDisposed || this.generation !== triggerGeneration + 1) return
+      this.scheduleReconnect(this.generation)
+    }
+  }
+
+  /**
+   * Schedules the next reconnect attempt with exponential backoff.
+   * Returns without scheduling if budget is exhausted or client is disposed.
+   */
+  private scheduleReconnect(currentGeneration: number): void {
+    if (this.isDisposed) return
+
+    if (this.reconnectAttempts >= this.reconnectConfig.maxAttempts) {
+      this.setState('error')
+      this.logger?.error(
+        `[dsh-graphify] Reconnect failed after ${this.reconnectAttempts} consecutive attempts. Will not retry automatically until next invocation.`
+      )
+      return
+    }
+
+    this.reconnectAttempts++
+    const delay = Math.min(
+      this.reconnectConfig.initialDelayMs * Math.pow(2, this.reconnectAttempts - 1),
+      this.reconnectConfig.maxDelayMs
+    )
+
+    this.setState('reconnecting')
+    this.logger?.warn(
+      `[dsh-graphify] Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.reconnectConfig.maxAttempts})...`
+    )
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      if (!this.isDisposed) {
+        this.reconnectAttempt(currentGeneration)
+      }
+    }, delay)
   }
 
   private handleDisconnect(generation: number): void {
@@ -282,33 +347,7 @@ export class GraphifyMcpClient {
       return
     }
 
-    if (this.reconnectAttempts >= this.reconnectConfig.maxAttempts) {
-      this.setState('error')
-      this.logger?.error(
-        `[dsh-graphify] Reconnect failed after ${this.reconnectAttempts} consecutive attempts. Will not retry automatically until next invocation.`
-      )
-      return
-    }
-
-    this.reconnectAttempts++
-    const delay = Math.min(
-      this.reconnectConfig.initialDelayMs * Math.pow(2, this.reconnectAttempts - 1),
-      this.reconnectConfig.maxDelayMs
-    )
-
-    this.setState('reconnecting')
-    this.logger?.warn(
-      `[dsh-graphify] Connection lost. Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.reconnectConfig.maxAttempts})...`
-    )
-
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      if (this.generation === generation && !this.isDisposed) {
-        this.init().catch(() => {
-          // Reconnection error handled inside establishConnection
-        })
-      }
-    }, delay)
+    this.scheduleReconnect(generation)
   }
 
   private setState(state: McpConnectionState): void {
@@ -318,7 +357,7 @@ export class GraphifyMcpClient {
       try {
         listener(state)
       } catch {
-        // Ignore
+        // Ignore listener errors
       }
     }
   }
@@ -366,6 +405,7 @@ export class GraphifyMcpClient {
       )
 
       return {
+        ...response,
         content: response.content as McpCallResult['content'],
         isError: response.isError ? true : undefined,
       }

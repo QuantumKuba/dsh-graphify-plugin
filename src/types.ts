@@ -213,6 +213,10 @@ export interface GraphifyStatusResult {
   }
   readonly mcp: {
     readonly state: McpConnectionState
+    /** Current consecutive reconnect attempt number (0 when not reconnecting). */
+    readonly reconnectAttempts?: number
+    /** Maximum reconnect attempts configured. */
+    readonly maxReconnectAttempts?: number
     readonly recentStderr?: string
     readonly error?: string
   }

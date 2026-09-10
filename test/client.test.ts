@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GraphifyMcpClient } from '../src/client.ts'
@@ -9,6 +11,24 @@ import { resolveGraphifyCommand } from '../src/server-process.ts'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
 const serverPath = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
+const flakyServerPath = path.join(__dirname, 'fixtures', 'fake-mcp-server-flaky.mjs')
+
+function waitForState(client: GraphifyMcpClient, targetState: string, timeoutMs = 5000): Promise<void> {
+  if (client.getConnectionState() === targetState) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error(`Timed out waiting for state '${targetState}', current state is '${client.getConnectionState()}'`))
+    }, timeoutMs)
+    const cleanup = client.onConnectionStateChange((state) => {
+      if (state === targetState) {
+        clearTimeout(timer)
+        cleanup()
+        resolve()
+      }
+    })
+  })
+}
 
 function createClient() {
   return new GraphifyMcpClient({
@@ -130,6 +150,10 @@ describe('GraphifyMcpClient', () => {
     try {
       await assert.rejects(() => client.init(), /Failed to connect|Connection closed|Fatal crash/i)
       assert.notEqual(client.getConnectionState(), 'connected')
+      // Ensure internal references are torn down
+      const internals = client as unknown as { client: unknown; transport: unknown }
+      assert.equal(internals.client, null)
+      assert.equal(internals.transport, null)
     } finally {
       await client.dispose()
     }
@@ -163,6 +187,209 @@ describe('GraphifyMcpClient', () => {
       assert.equal(client.getConnectionState(), 'disposed')
     } finally {
       await client.dispose()
+    }
+  })
+
+  it('retries reconnect after failed handshakes and eventually reconnects', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graphify-reconnect-retry-'))
+    const attemptFile = path.join(tempDir, 'attempt.txt')
+    const triggerFile = path.join(tempDir, 'trigger.txt')
+
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [flakyServerPath],
+      cwd: fixtureDir,
+      env: {
+        ...process.env,
+        FAIL_COUNT: '2',
+        ATTEMPT_FILE: attemptFile,
+        TRIGGER_FILE: triggerFile,
+      } as Record<string, string>,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 20,
+        maxDelayMs: 50,
+        maxAttempts: 5,
+      },
+    })
+
+    try {
+      // 1. Initial connection succeeds because triggerFile does not exist
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // 2. Enable failure mode: the next 2 process attempts will fail
+      fs.writeFileSync(triggerFile, 'fail')
+
+      // 3. Trigger unexpected disconnect
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      // 4. Wait for client to reconnect (should fail 2 times, succeed on 3rd)
+      await waitForState(client, 'connected', 5000)
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // 5. Verify the tool calls still succeed after reconnect
+      const result = await client.callTool('query_graph', {})
+      assert.equal(result.isError, undefined)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('exhausts reconnect budget after maxAttempts consecutive failures', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graphify-reconnect-exhaust-'))
+    const attemptFile = path.join(tempDir, 'attempt.txt')
+    const triggerFile = path.join(tempDir, 'trigger.txt')
+
+    const maxAttempts = 3
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [flakyServerPath],
+      cwd: fixtureDir,
+      env: {
+        ...process.env,
+        FAIL_COUNT: '99', // will always fail
+        ATTEMPT_FILE: attemptFile,
+        TRIGGER_FILE: triggerFile,
+      } as Record<string, string>,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 15,
+        maxDelayMs: 30,
+        maxAttempts,
+      },
+    })
+
+    try {
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // Enable persistent failure
+      fs.writeFileSync(triggerFile, 'fail')
+
+      // Trigger disconnect
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      // Wait for client to enter final error state after exhausting attempts
+      await waitForState(client, 'error', 5000)
+      assert.equal(client.getConnectionState(), 'error')
+      assert.equal(client.getReconnectAttempts(), maxAttempts)
+
+      // Verify no further attempts are scheduled by waiting past delay
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      assert.equal(client.getConnectionState(), 'error')
+      assert.equal(client.getReconnectAttempts(), maxAttempts)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('resets reconnect attempt counter after stable connected period', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graphify-reconnect-reset-'))
+    const attemptFile = path.join(tempDir, 'attempt.txt')
+    const triggerFile = path.join(tempDir, 'trigger.txt')
+
+    const maxDelayMs = 40
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [flakyServerPath],
+      cwd: fixtureDir,
+      env: {
+        ...process.env,
+        FAIL_COUNT: '1', // 1 failure then succeeds
+        ATTEMPT_FILE: attemptFile,
+        TRIGGER_FILE: triggerFile,
+      } as Record<string, string>,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 15,
+        maxDelayMs,
+        maxAttempts: 5,
+      },
+    })
+
+    try {
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      fs.writeFileSync(triggerFile, 'fail')
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      await waitForState(client, 'connected', 5000)
+      assert.equal(client.getConnectionState(), 'connected')
+      // Immediately after reconnecting, attempts is > 0
+      assert.ok(client.getReconnectAttempts() > 0)
+
+      // Wait for stable timer (maxDelayMs + safety margin)
+      await new Promise((resolve) => setTimeout(resolve, maxDelayMs + 60))
+      assert.equal(client.getReconnectAttempts(), 0)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('disposes during failed reconnect attempt without scheduling further retries', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graphify-reconnect-dispose-'))
+    const attemptFile = path.join(tempDir, 'attempt.txt')
+    const triggerFile = path.join(tempDir, 'trigger.txt')
+
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [flakyServerPath],
+      cwd: fixtureDir,
+      env: {
+        ...process.env,
+        FAIL_COUNT: '99',
+        ATTEMPT_FILE: attemptFile,
+        TRIGGER_FILE: triggerFile,
+      } as Record<string, string>,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 20,
+        maxDelayMs: 50,
+        maxAttempts: 10,
+      },
+    })
+
+    try {
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      fs.writeFileSync(triggerFile, 'fail')
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      // Wait until it enters reconnecting
+      await waitForState(client, 'reconnecting', 2000)
+
+      // Dispose while reconnecting/attempting
+      await client.dispose()
+      assert.equal(client.getConnectionState(), 'disposed')
+
+      // Record attempt count
+      let attemptsAtDispose = 0
+      if (fs.existsSync(attemptFile)) {
+        attemptsAtDispose = parseInt(fs.readFileSync(attemptFile, 'utf8').trim(), 10) || 0
+      }
+
+      // Wait past retry delay and verify no new attempts happened
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      assert.equal(client.getConnectionState(), 'disposed')
+
+      let attemptsAfterWait = 0
+      if (fs.existsSync(attemptFile)) {
+        attemptsAfterWait = parseInt(fs.readFileSync(attemptFile, 'utf8').trim(), 10) || 0
+      }
+      assert.ok(attemptsAfterWait <= attemptsAtDispose + 1)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
 })
