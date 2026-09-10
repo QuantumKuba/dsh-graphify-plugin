@@ -19,19 +19,44 @@ export function detectGraph(
     const resolved = path.resolve(searchDir, customGraphPath)
     try {
       const stats = fs.statSync(resolved)
+      let graphJsonPath: string | undefined
+      let graphDir: string | undefined
+
       if (stats.isDirectory()) {
         const directJson = path.join(resolved, 'graph.json')
         const outJson = path.join(resolved, 'graphify-out', 'graph.json')
         if (fs.existsSync(directJson)) {
-          return buildDetectedGraph(path.dirname(resolved), directJson, resolved)
-        }
-        if (fs.existsSync(outJson)) {
-          return buildDetectedGraph(resolved, outJson, path.join(resolved, 'graphify-out'))
+          graphJsonPath = directJson
+          graphDir = resolved
+        } else if (fs.existsSync(outJson)) {
+          graphJsonPath = outJson
+          graphDir = path.join(resolved, 'graphify-out')
         }
       } else if (stats.isFile() && path.basename(resolved) === 'graph.json') {
-        const graphDir = path.dirname(resolved)
-        const projectRoot = path.basename(graphDir) === 'graphify-out' ? path.dirname(graphDir) : graphDir
-        return buildDetectedGraph(projectRoot, resolved, graphDir)
+        graphJsonPath = resolved
+        graphDir = path.dirname(resolved)
+      }
+
+      if (graphJsonPath && graphDir) {
+        // Authoritative project root resolution order:
+        // 1. .graphify_root marker beside graph.json, if valid and points to an existing directory
+        // 2. Calling session root (searchDir), ONLY when evidence binds the graph to that project
+        //    (customGraphPath was relative, or resolved graph path is contained within searchDir)
+        // 3. Canonical layout inference (path.basename(graphDir) === 'graphify-out' -> path.dirname(graphDir))
+        // 4. Fallback: graphDir
+        let projectRoot: string
+        const markerRoot = readValidGraphifyRoot(graphDir)
+        if (markerRoot) {
+          projectRoot = markerRoot
+        } else if (isBoundToSearchDir(searchDir, customGraphPath, graphJsonPath)) {
+          projectRoot = path.resolve(searchDir)
+        } else if (path.basename(graphDir) === 'graphify-out') {
+          projectRoot = path.dirname(graphDir)
+        } else {
+          projectRoot = graphDir
+        }
+
+        return buildDetectedGraph(projectRoot, graphJsonPath, graphDir)
       }
     } catch {
       // Path does not exist or cannot be accessed
@@ -47,15 +72,16 @@ export function detectGraph(
     const candidateOutDir = path.join(current, 'graphify-out')
     const candidateGraphJson = path.join(candidateOutDir, 'graph.json')
     if (fs.existsSync(candidateGraphJson)) {
-      const markerPath = path.join(candidateOutDir, '.graphify_root')
-      return buildDetectedGraph(readGraphifyRoot(markerPath) || current, candidateGraphJson, candidateOutDir)
+      const markerRoot = readValidGraphifyRoot(candidateOutDir)
+      return buildDetectedGraph(markerRoot || current, candidateGraphJson, candidateOutDir)
     }
 
     // Check if current is already graphify-out/
     if (path.basename(current) === 'graphify-out') {
       const inOutJson = path.join(current, 'graph.json')
       if (fs.existsSync(inOutJson)) {
-        return buildDetectedGraph(path.dirname(current), inOutJson, current)
+        const markerRoot = readValidGraphifyRoot(current)
+        return buildDetectedGraph(markerRoot || path.dirname(current), inOutJson, current)
       }
     }
 
@@ -68,14 +94,53 @@ export function detectGraph(
   return null
 }
 
-/** Reads Graphify's optional authoritative scan-root marker. */
-function readGraphifyRoot(markerPath: string): string | undefined {
+/**
+ * Checks whether evidence exists binding an explicit graph path to the calling session root.
+ */
+function isBoundToSearchDir(
+  searchDir: string | undefined,
+  customGraphPath: string,
+  resolvedGraphPath: string
+): boolean {
+  if (!searchDir) return false
+  const resolvedSearchDir = path.resolve(searchDir)
   try {
-    const value = fs.readFileSync(markerPath, 'utf8').replace(/^\uFEFF/, '').trim()
-    return value && path.isAbsolute(value) ? path.resolve(value) : undefined
+    if (!fs.existsSync(resolvedSearchDir) || !fs.statSync(resolvedSearchDir).isDirectory()) {
+      return false
+    }
+  } catch {
+    return false
+  }
+
+  // Evidence 1: customGraphPath was explicitly relative to searchDir
+  if (!path.isAbsolute(customGraphPath)) {
+    return true
+  }
+
+  // Evidence 2: resolvedGraphPath is physically located inside searchDir
+  const rel = path.relative(resolvedSearchDir, resolvedGraphPath)
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    return true
+  }
+
+  return false
+}
+
+/** Reads Graphify's optional authoritative scan-root marker. */
+export function readValidGraphifyRoot(graphDir: string): string | undefined {
+  const markerPath = path.join(graphDir, '.graphify_root')
+  try {
+    if (!fs.existsSync(markerPath)) return undefined
+    const raw = fs.readFileSync(markerPath, 'utf8').replace(/^\uFEFF/, '').trim()
+    if (!raw) return undefined
+    const candidate = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(graphDir, raw)
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate
+    }
   } catch {
     return undefined
   }
+  return undefined
 }
 
 function buildDetectedGraph(projectRoot: string, graphJsonPath: string, graphDir: string): DetectedGraph {
@@ -92,3 +157,4 @@ function buildDetectedGraph(projectRoot: string, graphJsonPath: string, graphDir
     hasGraph,
   }
 }
+

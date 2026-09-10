@@ -99,4 +99,67 @@ describe('Multi-Project Resource Isolation', () => {
       fs.rmSync(tempDirB, { recursive: true, force: true })
     }
   })
+
+  it('rejects symlink traversals escaping the graph directory boundary and non-regular files', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-symlink-test-'))
+    const outsideSecret = path.join(tempDir, 'outside-secret.txt')
+    fs.writeFileSync(outsideSecret, 'SUPER_SECRET_TOKEN')
+
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    fs.writeFileSync(path.join(graphDir, 'graph.json'), JSON.stringify({ nodes: [], links: [] }))
+
+    // 1. File symlink: GRAPH_REPORT.md -> outsideSecret
+    const reportLink = path.join(graphDir, 'GRAPH_REPORT.md')
+    fs.symlinkSync(outsideSecret, reportLink)
+
+    const config = Config({
+      command: process.execPath,
+      args: [serverPath],
+      toolMode: 'full',
+    })
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [serverPath],
+      cwd: tempDir,
+    })
+
+    const tools = createGraphifyToolDefinitions(client, config)
+    const resourceTool = tools.find((t) => t.name === 'graphify_project_resource')!
+
+    const execContext = {
+      signal: new AbortController().signal,
+      agent: { session: { header: { cwd: tempDir } } },
+    }
+
+    try {
+      // Should reject report pointing outside graphDir
+      const reportRes = await resourceTool.execute({ resource: 'report' }, execContext)
+      assert.equal(reportRes.isError, true)
+      assert.match(reportRes.text, /escapes graph directory boundary/i)
+      assert.ok(!reportRes.text.includes('SUPER_SECRET_TOKEN'))
+
+      // 2. Directory symlink: wiki/ points to outside directory containing index.md
+      const outsideWiki = path.join(tempDir, 'outside-wiki')
+      fs.mkdirSync(outsideWiki, { recursive: true })
+      fs.writeFileSync(path.join(outsideWiki, 'index.md'), 'Outside Wiki Content')
+      fs.symlinkSync(outsideWiki, path.join(graphDir, 'wiki'))
+
+      const wikiRes = await resourceTool.execute({ resource: 'wiki' }, execContext)
+      assert.equal(wikiRes.isError, true)
+      assert.match(wikiRes.text, /escapes graph directory boundary/i)
+      assert.ok(!wikiRes.text.includes('Outside Wiki Content'))
+
+      // 3. Non-regular file: wiki/index.md is a directory instead of a file
+      fs.rmSync(path.join(graphDir, 'wiki'), { recursive: true, force: true })
+      fs.mkdirSync(path.join(graphDir, 'wiki', 'index.md'), { recursive: true })
+
+      const dirRes = await resourceTool.execute({ resource: 'wiki' }, execContext)
+      assert.equal(dirRes.isError, true)
+      assert.match(dirRes.text, /not a regular file/i)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

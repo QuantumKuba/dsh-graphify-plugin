@@ -117,8 +117,10 @@ export class ProjectResolver {
   }
 
   private buildEmptyProject(projectRoot: string): ResolvedProject {
-    const candidateGraphDir = path.join(projectRoot, 'graphify-out')
-    const candidateGraphJson = path.join(candidateGraphDir, 'graph.json')
+    const candidateGraphJson = this.config.graphPath
+      ? path.resolve(projectRoot, this.config.graphPath)
+      : path.join(projectRoot, 'graphify-out', 'graph.json')
+    const candidateGraphDir = path.dirname(candidateGraphJson)
     const hasGraph = fs.existsSync(candidateGraphJson)
 
     let mtimeMs: number | undefined

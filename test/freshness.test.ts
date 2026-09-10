@@ -623,4 +623,55 @@ describe('Graph Freshness and Coalescing', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('preserves freshness across git staging state transitions (git add / git reset)', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-staging-invar-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'file.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    try {
+      // 1. Modify file in working tree (unstaged)
+      fs.writeFileSync(path.join(tempDir, 'file.ts'), 'export const a = 2')
+
+      // Checkpoint metadata while file is modified and unstaged
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // 2. Stage the modification (git add file.ts) -> must still be FRESH
+      spawnSync('git', ['add', 'file.ts'], { cwd: tempDir })
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // 3. Unstage the modification (git reset file.ts) -> must still be FRESH
+      spawnSync('git', ['reset', 'HEAD', 'file.ts'], { cwd: tempDir })
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // 4. Stage again, then modify file further -> must be STALE
+      spawnSync('git', ['add', 'file.ts'], { cwd: tempDir })
+      fs.writeFileSync(path.join(tempDir, 'file.ts'), 'export const a = 3')
+      assert.equal(checkGraphFreshness(project).state, 'stale')
+
+      // 5. Restore file back to indexed bytes (export const a = 2) -> must be FRESH
+      fs.writeFileSync(path.join(tempDir, 'file.ts'), 'export const a = 2')
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

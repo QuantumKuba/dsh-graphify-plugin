@@ -13,7 +13,13 @@ import type {
   ToolMode,
 } from './types.ts'
 import { ProjectResolver } from './project-resolver.ts'
-import { checkGraphFreshness, ProjectUpdateCoalescer } from './freshness.ts'
+import {
+  checkGraphFreshness,
+  ProjectUpdateCoalescer,
+  evaluateAutoUpdateEligibility,
+  performPostUpdateValidation,
+  writeGraphifyIndexMetadata,
+} from './freshness.ts'
 import { collectGraphifyStatus, formatGraphifyStatus } from './status.ts'
 
 export interface GraphifyToolOutput {
@@ -104,23 +110,37 @@ export function createGraphifyToolDefinitions(
       } else if (freshnessMode === 'auto') {
         const freshness = checkGraphFreshness(project)
         if (freshness.state === 'stale') {
-          const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal, project.graphJsonPath)
-          if (updateRes.success) {
-            resolver.invalidate(project.projectRoot)
-            // Re-resolve project and refresh metadata after update
-            project = resolver.resolve({
-              explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
-              toolContext: execution,
-            })
-            if (!args.project_path) {
-              args.project_path = project.projectRoot
+          const eligibility = evaluateAutoUpdateEligibility(project)
+          if (eligibility.kind === 'requires-full-refresh') {
+            stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
+          } else if (eligibility.kind === 'unsupported-target') {
+            stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
+          } else if (eligibility.kind === 'unknown') {
+            stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
+          } else if (eligibility.kind === 'eligible') {
+            const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal, project.graphJsonPath)
+            if (updateRes.success) {
+              if (project.graphJsonPath && performPostUpdateValidation(project.projectRoot, project.graphJsonPath)) {
+                writeGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
+                resolver.invalidate(project.projectRoot)
+                // Re-resolve project and refresh metadata after update
+                project = resolver.resolve({
+                  explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
+                  toolContext: execution,
+                })
+                if (!args.project_path) {
+                  args.project_path = project.projectRoot
+                }
+                const postFreshness = checkGraphFreshness(project)
+                if (postFreshness.state === 'stale') {
+                  stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
+                }
+              } else {
+                stalenessNotice = `[Notice: Post-update validation failed for graph.json. Graph may be incomplete or invalid.]\n\n`
+              }
+            } else {
+              stalenessNotice = `[Notice: Auto-update failed (${updateRes.error || updateRes.stderr.trim()}). Using current graph.]\n\n`
             }
-            const postFreshness = checkGraphFreshness(project)
-            if (postFreshness.state === 'stale') {
-              stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
-            }
-          } else {
-            stalenessNotice = `[Notice: Auto-update failed (${updateRes.error || updateRes.stderr.trim()}). Using current graph.]\n\n`
           }
         }
       }
@@ -475,14 +495,29 @@ export function createGraphifyToolDefinitions(
               return { text: `Unknown resource type: ${rawArgs.resource}. Use report, wiki, or stats.`, isError: true }
           }
           if (filePath) {
-            const resolvedFile = path.resolve(filePath)
-            const resolvedGraphDir = path.resolve(project.graphDir)
-            if (!resolvedFile.startsWith(resolvedGraphDir + path.sep) && resolvedFile !== resolvedGraphDir) {
+            let realGraphDir: string
+            let realFile: string
+            try {
+              realGraphDir = fs.realpathSync(path.resolve(project.graphDir))
+              realFile = fs.realpathSync(path.resolve(filePath))
+            } catch {
+              return { text: fallbackMessage, isError: true }
+            }
+
+            const rel = path.relative(realGraphDir, realFile)
+            if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
               return { text: 'Resource path escapes graph directory boundary.', isError: true }
             }
-            if (fs.existsSync(resolvedFile)) {
-              const content = fs.readFileSync(resolvedFile, 'utf8')
+
+            try {
+              const stat = fs.statSync(realFile)
+              if (!stat.isFile()) {
+                return { text: 'Resource path is not a regular file.', isError: true }
+              }
+              const content = fs.readFileSync(realFile, 'utf8')
               return { text: content }
+            } catch {
+              return { text: fallbackMessage, isError: true }
             }
           }
           return { text: fallbackMessage, isError: true }

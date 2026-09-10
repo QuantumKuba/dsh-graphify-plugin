@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
@@ -129,10 +130,10 @@ export function registerGraphifyCommand(
         const { command, args } = resolveGraphifyCliCommand(config, request)
         const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
         try {
-          const graphJsonPath = config.graphPath
-            ? path.resolve(request.projectRoot, config.graphPath)
-            : undefined
-          writeGraphifyIndexMetadata(request.projectRoot, graphJsonPath)
+          const canonicalGraphJson = path.join(request.projectRoot, 'graphify-out', 'graph.json')
+          if (fs.existsSync(canonicalGraphJson)) {
+            writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+          }
         } catch {
           // Metadata recording failure ignored
         }
