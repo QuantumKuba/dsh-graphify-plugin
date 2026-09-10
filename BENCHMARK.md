@@ -47,7 +47,7 @@ The benchmark executes an A/B matrix across identical task suites:
 | :--- | :--- | :--- | :--- |
 | **Control (Baseline)** | DSH standard profile (`fs`, `shell`, `editor`) | `read_file`, `write_file`, `edit_file`, `grep`, `list_dir`, `bash` | N/A |
 | **Treatment A (Full)** | DSH + `dsh-graphify` (`toolMode: full`) | Baseline tools + 10 Graphify tools + `graphify_status` + escape hatches | `freshness: { mode: 'warn' }` |
-| **Treatment B (Compact - Recommended)** | DSH + `dsh-graphify` (`toolMode: compact`, `toolPrefix: graphify_`) | Baseline tools + 6 compact Graphify tools (`query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `graphify_status`, `graphify_resource`) | `freshness: { mode: 'warn' }` |
+| **Treatment B (Compact - Recommended)** | DSH + `dsh-graphify` (`toolMode: compact`, `toolPrefix: graphify_`) | Baseline tools + 6 compact Graphify tools (`query_graph`, `get_node`, `get_neighbors`, `shortest_path`, `graphify_status`, `graphify_project_resource`) | `freshness: { mode: 'warn' }` |
 
 ---
 

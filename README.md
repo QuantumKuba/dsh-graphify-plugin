@@ -89,7 +89,7 @@ Includes all 6 compact tools plus 9 specialized tools:
 The `graphify_status` tool is exposed to both human operators and the model to verify environment health and troubleshoot graph issues:
 
 ```text
-=== Graphify Status: HEALTHY ===
+Graphify Status: HEALTHY
 • Project Root: /workspace/my-repo
 • Knowledge Graph: /workspace/my-repo/graphify-out/graph.json
 • Last Indexed: 2026-09-10T00:15:30.000Z
@@ -113,6 +113,8 @@ Out-of-date graphs cause agents to hallucinate non-existent symbols or miss refa
 - **`freshness: { mode: 'warn' }` (Default)**: Injects an actionable warning into tool responses when git commits or file modifications occurred after the graph was last built.
 - **`freshness: { mode: 'auto', updateTimeoutMs: 120000 }`**: Automatically triggers a coalesced pre-query incremental graph update via `ProjectUpdateCoalescer` before executing tools when staleness is detected. The process lock is held until child process termination, preventing duplicate jobs and race conditions across concurrent sessions.
 - **`freshness: { mode: 'off' }`**: Disables freshness evaluation for airgapped or static environments.
+
+In monorepos and subprojects, git status and diff checks are scoped to the resolved project root (`-- .`), ensuring only changes within the active workspace affect freshness evaluation.
 
 ---
 
@@ -161,8 +163,9 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 `dsh-graphify` declares explicit `peerDependencies` supported across DeepSeek Harness releases:
 
 - **Cordis Microkernel**: Supports `@deepseek-ai/cordis` `>=4.0.0` (including `^4.0.1` and `4.0.2`).
-- **DSH Session & Core**: Supports `@deepseek-ai/dsh-session` `>=0.1.0` (including `0.1.1-rc.2` through `0.1.5-alpha.2`).
-- **DSH Commands**: Supports `@deepseek-ai/dsh-commands` `>=0.1.0`.
+- **DSH Session & Core**: Supports `@deepseek-ai/dsh-session` `>=0.1.1-rc.2`.
+- **DSH Commands**: Supports `@deepseek-ai/dsh-commands` `>=0.1.1-rc.2`.
+- **DSH Client UI & Locale**: Supports `@deepseek-ai/dsh-client-locale` and `@deepseek-ai/dsh-client-ui-conversation` `>=0.1.1-rc.2`.
 - **Contract Drift Detection**: Automated schema drift tests (`pnpm run test:drift`) prevent breaking changes between Graphify MCP schemas and plugin definitions.
 
 ---
