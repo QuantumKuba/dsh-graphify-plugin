@@ -1,18 +1,20 @@
+import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Config } from './config.ts'
 import type { ResolvedProject, GraphFreshnessInfo } from './types.ts'
-import { resolveGraphifyCliCommand } from './server-process.ts'
+import { resolveGraphifyCliCommand, terminateChildProcess } from './server-process.ts'
 
 export const INDEX_METADATA_FILENAME = '.dsh-graphify-index.json'
 
 /**
  * Durable metadata recorded by dsh-graphify after a successful graph build or update.
- * Tracks the exact git repository state (commit HEAD, tree SHA, branch) the graph reflects,
- * eliminating false-positive freshness checks on branch checkouts.
+ *
+ * V1: Original format without working-tree fingerprint.
+ * V2: Adds `workingTreeFingerprint` for deterministic dirty-state tracking.
  */
-export interface GraphifyIndexMetadata {
+export interface GraphifyIndexMetadataV1 {
   readonly version: 1
   readonly indexedAt: string
   readonly graphPath: string
@@ -24,6 +26,20 @@ export interface GraphifyIndexMetadata {
   }
 }
 
+export interface GraphifyIndexMetadata {
+  readonly version: 1 | 2
+  readonly indexedAt: string
+  readonly graphPath: string
+  readonly graphMtimeMs: number
+  readonly git?: {
+    readonly head: string
+    readonly tree: string
+    readonly branch?: string | null
+    /** SHA-256 hash of tracked+staged diffs and untracked file manifest at index time. */
+    readonly workingTreeFingerprint?: string
+  }
+}
+
 export interface UpdateResult {
   readonly success: boolean
   readonly stdout: string
@@ -32,7 +48,62 @@ export interface UpdateResult {
 }
 
 /**
- * Writes a durable index metadata file inside graphify-out/.
+ * Computes a deterministic fingerprint of the working tree's dirty state.
+ * Includes tracked diffs, staged diffs, and untracked file manifest.
+ */
+function computeWorkingTreeFingerprint(projectRoot: string): string | undefined {
+  try {
+    const hash = createHash('sha256')
+
+    // Tracked unstaged changes
+    const diffRes = spawnSync('git', ['diff', 'HEAD'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    })
+    if (diffRes.status === 0) {
+      hash.update(diffRes.stdout)
+    }
+
+    // Staged changes
+    const cachedRes = spawnSync('git', ['diff', '--cached', 'HEAD'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    })
+    if (cachedRes.status === 0) {
+      hash.update(cachedRes.stdout)
+    }
+
+    // Untracked files (sorted path:size manifest, excluding generated dirs)
+    const untrackedRes = spawnSync('git', ['ls-files', '--others', '--exclude-standard'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 5000,
+    })
+    if (untrackedRes.status === 0 && untrackedRes.stdout.trim()) {
+      const files = untrackedRes.stdout.trim().split('\n')
+        .filter(f => !f.startsWith('graphify-out/') && !f.includes('/graphify-out/'))
+        .sort()
+      for (const file of files) {
+        let size = 0
+        try {
+          size = fs.statSync(path.join(projectRoot, file)).size
+        } catch {
+          // Ignore unreadable files
+        }
+        hash.update(`${file}:${size}\n`)
+      }
+    }
+
+    return hash.digest('hex')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Writes a durable v2 index metadata file beside the graph.json.
  */
 export function writeGraphifyIndexMetadata(
   projectRoot: string,
@@ -69,15 +140,16 @@ export function writeGraphifyIndexMetadata(
         timeout: 2000,
       })
       const branch = branchRes.status === 0 ? branchRes.stdout.trim() : null
+      const workingTreeFingerprint = computeWorkingTreeFingerprint(projectRoot)
 
-      gitInfo = { head, tree, branch }
+      gitInfo = { head, tree, branch, workingTreeFingerprint }
     }
   } catch {
     // Non-git environment
   }
 
   const metadata: GraphifyIndexMetadata = {
-    version: 1,
+    version: 2,
     indexedAt: new Date(graphMtimeMs).toISOString(),
     graphPath: path.relative(projectRoot, graphPath),
     graphMtimeMs,
@@ -98,16 +170,27 @@ export function writeGraphifyIndexMetadata(
 }
 
 /**
- * Reads durable index metadata if present in graphify-out/.
+ * Reads durable index metadata from beside the graph.json file.
+ * Accepts both v1 and v2 metadata formats.
+ *
+ * @param projectRoot - Project root directory.
+ * @param graphJsonPath - Explicit path to graph.json; when provided, metadata is
+ *   read from the same directory rather than the hardcoded graphify-out/.
  */
-export function readGraphifyIndexMetadata(projectRoot: string): GraphifyIndexMetadata | null {
-  const metaPath = path.join(projectRoot, 'graphify-out', INDEX_METADATA_FILENAME)
+export function readGraphifyIndexMetadata(
+  projectRoot: string,
+  graphJsonPath?: string | null
+): GraphifyIndexMetadata | null {
+  const metaDir = graphJsonPath
+    ? path.dirname(graphJsonPath)
+    : path.join(projectRoot, 'graphify-out')
+  const metaPath = path.join(metaDir, INDEX_METADATA_FILENAME)
   if (!fs.existsSync(metaPath)) return null
 
   try {
     const raw = fs.readFileSync(metaPath, 'utf8')
     const parsed = JSON.parse(raw) as GraphifyIndexMetadata
-    if (parsed && parsed.version === 1 && typeof parsed.graphMtimeMs === 'number') {
+    if (parsed && (parsed.version === 1 || parsed.version === 2) && typeof parsed.graphMtimeMs === 'number') {
       return parsed
     }
   } catch {
@@ -120,7 +203,10 @@ export function readGraphifyIndexMetadata(projectRoot: string): GraphifyIndexMet
  * Evaluates the freshness of a project's Graphify knowledge graph relative to
  * repository HEAD state, uncommitted working tree changes, and file modifications.
  */
-export function checkGraphFreshness(project: ResolvedProject): GraphFreshnessInfo {
+export function checkGraphFreshness(
+  project: ResolvedProject,
+  options?: { maxScanFiles?: number }
+): GraphFreshnessInfo {
   if (!project.hasGraph || !project.graphJsonPath) {
     return {
       state: 'unknown',
@@ -141,8 +227,8 @@ export function checkGraphFreshness(project: ResolvedProject): GraphFreshnessInf
 
   const lastIndexedTime = new Date(graphMtimeMs).toISOString()
 
-  // 1. Check durable index metadata first if available
-  const metadata = readGraphifyIndexMetadata(project.projectRoot)
+  // 1. Check durable index metadata first if available (respects custom graphPath)
+  const metadata = readGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
   if (metadata && metadata.git) {
     const metaGitCheck = checkMetadataGitFreshness(project.projectRoot, metadata)
     if (metaGitCheck) {
@@ -167,7 +253,7 @@ export function checkGraphFreshness(project: ResolvedProject): GraphFreshnessInf
   }
 
   // 3. Non-git recursive filesystem fallback
-  const fileCheck = checkFilesystemRecursiveFreshness(project.projectRoot, graphMtimeMs)
+  const fileCheck = checkFilesystemRecursiveFreshness(project.projectRoot, graphMtimeMs, options?.maxScanFiles)
   return {
     ...fileCheck,
     lastIndexedTime,
@@ -216,7 +302,51 @@ function checkMetadataGitFreshness(
       }
     }
 
-    // Check uncommitted changes in working tree scoped to projectRoot
+    // Compare Git branch if recorded
+    if (metadata.git.branch) {
+      const branchRes = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        timeout: 2000,
+      })
+      if (branchRes.status === 0 && branchRes.stdout.trim()) {
+        const currentBranch = branchRes.stdout.trim()
+        if (currentBranch !== 'HEAD' && currentBranch !== metadata.git.branch) {
+          return {
+            state: 'stale',
+            reason: `Git branch changed from ${metadata.git.branch} to ${currentBranch}`,
+            strategy: 'metadata',
+          }
+        }
+      }
+    }
+
+    // V2 fingerprint comparison: deterministic dirty-state tracking.
+    // If the metadata has a workingTreeFingerprint (v2), compare it against
+    // the current working tree state. This allows indexing dirty repos without
+    // perpetual false-positive staleness.
+    if (metadata.version === 2 && metadata.git?.workingTreeFingerprint) {
+      const currentFingerprint = computeWorkingTreeFingerprint(projectRoot)
+      if (currentFingerprint && currentFingerprint === metadata.git.workingTreeFingerprint) {
+        return {
+          state: 'fresh',
+          reason: `Graph matches current Git HEAD (${currentHead.slice(0, 7)}) and working tree fingerprint`,
+          changedFilesCount: 0,
+          changedFilesSample: [],
+          strategy: 'metadata',
+        }
+      }
+      if (currentFingerprint && currentFingerprint !== metadata.git.workingTreeFingerprint) {
+        return {
+          state: 'stale',
+          reason: 'Working tree changed since graph was indexed (fingerprint mismatch)',
+          strategy: 'metadata',
+        }
+      }
+      // Fingerprint unavailable — fall through to porcelain check
+    }
+
+    // V1 fallback: check uncommitted changes in working tree scoped to projectRoot
     const statusRes = spawnSync('git', ['status', '--porcelain', '--', '.'], {
       cwd: projectRoot,
       encoding: 'utf8',
@@ -328,29 +458,36 @@ function checkGitHeuristicFreshness(
   }
 }
 
+/** Directories skipped during recursive filesystem freshness walks. */
 const IGNORED_DIRECTORIES = new Set([
   '.git',
+  '.pnpm-store',
+  '.next',
+  '.cache',
+  '.venv',
+  '.tox',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.pytest_cache',
+  '__pycache__',
   'graphify-out',
   'node_modules',
   'dist',
   'build',
   'coverage',
-  '.next',
-  '.cache',
-  '.venv',
   'venv',
   'target',
   'vendor',
 ])
 
 /** Recursive filesystem fallback: walks source directories excluding build and lock artifacts. */
-function checkFilesystemRecursiveFreshness(
+export function checkFilesystemRecursiveFreshness(
   projectRoot: string,
-  graphMtimeMs: number
+  graphMtimeMs: number,
+  maxFiles = 10000
 ): Omit<GraphFreshnessInfo, 'lastIndexedTime'> {
   const changedFiles: string[] = []
   let filesScanned = 0
-  const maxFiles = 10000
   const maxDepth = 15
 
   function walk(currentDir: string, depth: number): void {
@@ -367,7 +504,7 @@ function checkFilesystemRecursiveFreshness(
       if (filesScanned >= maxFiles) break
 
       const name = entry.name
-      if (IGNORED_DIRECTORIES.has(name) || (name.startsWith('.') && name !== '.')) continue
+      if (IGNORED_DIRECTORIES.has(name)) continue
 
       const fullPath = path.join(currentDir, name)
 
@@ -405,6 +542,15 @@ function checkFilesystemRecursiveFreshness(
       reason: `${changedFiles.length} nested file(s) modified after graph index`,
       changedFilesCount: changedFiles.length,
       changedFilesSample: changedFiles.slice(0, 5),
+      strategy: 'filesystem-heuristic',
+    }
+  }
+
+  // Honest reporting when scan was truncated: cannot confirm freshness
+  if (filesScanned >= maxFiles) {
+    return {
+      state: 'unknown',
+      reason: `Scanned ${maxFiles} files without finding changes, but the project may have more files; freshness is uncertain`,
       strategy: 'filesystem-heuristic',
     }
   }
@@ -501,22 +647,7 @@ export class ProjectUpdateCoalescer {
 
       const terminateChild = (_reason: string) => {
         if (isExited) return
-        try {
-          child.kill('SIGTERM')
-        } catch {
-          // Process may already be dead
-        }
-
-        // Grace period before escalating to SIGKILL
-        killTimer = setTimeout(() => {
-          if (!isExited) {
-            try {
-              child.kill('SIGKILL')
-            } catch {
-              // Ignore
-            }
-          }
-        }, 1500)
+        terminateChildProcess(child as any, 1500)
       }
 
       child.stdout?.on('data', (chunk: Buffer) => {

@@ -12,6 +12,7 @@ import {
   ProjectUpdateCoalescer,
   writeGraphifyIndexMetadata,
   readGraphifyIndexMetadata,
+  checkFilesystemRecursiveFreshness,
 } from '../src/freshness.ts'
 import type { ResolvedProject } from '../src/types.ts'
 
@@ -119,7 +120,7 @@ describe('Graph Freshness and Coalescing', () => {
       writeGraphifyIndexMetadata(tempDir, graphJson)
       const meta = readGraphifyIndexMetadata(tempDir)
       assert.ok(meta)
-      assert.equal(meta.version, 1)
+      assert.equal(meta.version, 2)
       assert.ok(Date.parse(meta.indexedAt) > 0)
       assert.ok(meta.graphMtimeMs > 0)
     } finally {
@@ -282,5 +283,260 @@ describe('Graph Freshness and Coalescing', () => {
     assert.equal(abortResult.success, false)
     assert.match(abortResult.error || '', /cancelled by signal/)
     assert.ok(killedSignals.includes('SIGTERM'))
+  })
+
+  it('recognizes a freshly indexed clean Git repository as fresh', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-clean-git-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'file.txt'), 'content')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'commit1'], { cwd: tempDir })
+
+    try {
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.equal(freshness.state, 'fresh')
+      assert.equal(freshness.strategy, 'metadata')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('recognizes a dirty working tree as fresh when indexed with v2 fingerprint', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-dirty-fresh-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'file.txt'), 'initial')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'initial'], { cwd: tempDir })
+
+    // Modify file without committing — working tree is dirty
+    fs.writeFileSync(path.join(tempDir, 'file.txt'), 'uncommitted work in progress')
+
+    try {
+      // Indexing occurs on the dirty working tree
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      const meta = readGraphifyIndexMetadata(tempDir)
+      assert.ok(meta?.git?.workingTreeFingerprint, 'Expected workingTreeFingerprint in v2 metadata')
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+
+      // Despite being dirty, freshness is fresh because fingerprint matches
+      const freshness = checkGraphFreshness(project)
+      assert.equal(freshness.state, 'fresh')
+      assert.match(freshness.reason, /working tree fingerprint/i)
+
+      // Now make another uncommitted change
+      fs.writeFileSync(path.join(tempDir, 'file.txt'), 'subsequent uncommitted modification')
+      const modifiedFreshness = checkGraphFreshness(project)
+      assert.equal(modifiedFreshness.state, 'stale')
+      assert.match(modifiedFreshness.reason, /Working tree changed since graph was indexed/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects newly added untracked source file as stale in dirty repository', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-untracked-stale-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'base.txt'), 'base')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'base'], { cwd: tempDir })
+
+    try {
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // Add a brand new untracked file
+      fs.writeFileSync(path.join(tempDir, 'new-feature.ts'), 'export const feat = true')
+      const staleCheck = checkGraphFreshness(project)
+      assert.equal(staleCheck.state, 'stale')
+      assert.match(staleCheck.reason, /Working tree changed/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('detects branch switch as stale via durable metadata', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-branch-stale-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'file.txt'), 'init')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    try {
+      writeGraphifyIndexMetadata(tempDir, graphJson)
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // Switch to a new branch
+      spawnSync('git', ['checkout', '-b', 'feat-branch'], { cwd: tempDir })
+      const branchCheck = checkGraphFreshness(project)
+      assert.equal(branchCheck.state, 'stale')
+      assert.match(branchCheck.reason, /branch changed/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('maintains backward compatibility with v1 metadata schema', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-v1-compat-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'file.txt'), 'content')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tempDir, encoding: 'utf8' }).stdout.trim()
+    const tree = spawnSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: tempDir, encoding: 'utf8' }).stdout.trim()
+
+    // Manually write v1 metadata (no workingTreeFingerprint)
+    const v1Meta = {
+      version: 1,
+      indexedAt: new Date().toISOString(),
+      graphPath: graphJson,
+      graphMtimeMs: fs.statSync(graphJson).mtimeMs,
+      git: {
+        head,
+        tree,
+        branch: 'main',
+      },
+    }
+    fs.writeFileSync(path.join(graphDir, '.dsh-graphify-index.json'), JSON.stringify(v1Meta, null, 2))
+
+    try {
+      const meta = readGraphifyIndexMetadata(tempDir)
+      assert.ok(meta)
+      assert.equal(meta.version, 1)
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+
+      // When working tree is clean, v1 reports fresh
+      assert.equal(checkGraphFreshness(project).state, 'fresh')
+
+      // In v1, any dirty change causes staleness (fallback to porcelain)
+      fs.writeFileSync(path.join(tempDir, 'file.txt'), 'dirty-v1')
+      const dirtyCheck = checkGraphFreshness(project)
+      assert.equal(dirtyCheck.state, 'stale')
+      assert.match(dirtyCheck.reason, /uncommitted.*modified|uncommitted/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('correctly reads and writes metadata for custom graph paths', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-custom-graph-'))
+    const customGraphDir = path.join(tempDir, 'custom', 'nested')
+    fs.mkdirSync(customGraphDir, { recursive: true })
+    const customGraphPath = path.join(customGraphDir, 'my-graph.json')
+    fs.writeFileSync(customGraphPath, '{}')
+
+    try {
+      writeGraphifyIndexMetadata(tempDir, customGraphPath)
+      const metaPath = path.join(customGraphDir, '.dsh-graphify-index.json')
+      assert.ok(fs.existsSync(metaPath), 'Metadata should be written beside custom graph')
+
+      const meta = readGraphifyIndexMetadata(tempDir, customGraphPath)
+      assert.ok(meta)
+      assert.equal(meta.graphPath, path.relative(tempDir, customGraphPath))
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: customGraphPath,
+        graphDir: customGraphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(customGraphPath).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.ok(['fresh', 'unknown'].includes(freshness.state))
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports unknown with honest explanation when filesystem scan is truncated', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-truncation-'))
+    const graphMtimeMs = Date.now()
+
+    // Create 10 files
+    for (let i = 0; i < 10; i++) {
+      fs.writeFileSync(path.join(tempDir, `file_${i}.txt`), `content ${i}`)
+      const past = new Date(graphMtimeMs - 10000)
+      fs.utimesSync(path.join(tempDir, `file_${i}.txt`), past, past)
+    }
+
+    try {
+      // Scan with maxFiles = 3 (less than total files)
+      const result = checkFilesystemRecursiveFreshness(tempDir, graphMtimeMs, 3)
+      assert.equal(result.state, 'unknown')
+      assert.match(result.reason, /Scanned 3 files without finding changes/i)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
