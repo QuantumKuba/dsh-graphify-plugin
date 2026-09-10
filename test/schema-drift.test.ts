@@ -354,4 +354,14 @@ describe('Schema Drift Detection', () => {
     assert.equal(wideningDiff?.severity, 'informational')
     assert.match(wideningDiff?.detail || '', /Enum constraint removed/)
   })
+
+  it('guards canonical tool name resolution against adversarial prefix collisions', () => {
+    // Adversarial: prefix itself contains or ends with a canonical tool name
+    assert.equal(getCanonicalGraphifyName('get_node_query_graph'), 'get_node_query_graph')
+    assert.equal(getCanonicalGraphifyName('query_graph_get_node'), 'query_graph_get_node')
+
+    // Clean prefixes still resolve cleanly to their canonical tool name
+    assert.equal(getCanonicalGraphifyName('custom_prefix_query_graph'), 'query_graph')
+    assert.equal(getCanonicalGraphifyName('my_app_get_node'), 'get_node')
+  })
 })

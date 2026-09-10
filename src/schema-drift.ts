@@ -69,9 +69,16 @@ export function getCanonicalGraphifyName(toolName: string): string | null {
 
   // The tool name has some prefix. Try stripping progressively to find a
   // canonical or plugin-local match. We try all possible prefix lengths.
+  // Guard: reject if the prefix itself ends with a canonical name, since
+  // that indicates a collision (e.g. "get_node_query_graph" should NOT
+  // resolve to "query_graph" when "get_node" is also canonical).
   for (const canonical of CANONICAL_GRAPHIFY_TOOLS) {
     if (toolName.endsWith(canonical) && toolName.length > canonical.length) {
-      return canonical
+      const prefix = toolName.slice(0, -canonical.length)
+      const hasCollision = CANONICAL_GRAPHIFY_TOOLS.some(c =>
+        prefix.endsWith(c) || prefix.endsWith(c + '_')
+      )
+      if (!hasCollision) return canonical
     }
   }
   for (const local of PLUGIN_LOCAL_SUFFIXES) {
