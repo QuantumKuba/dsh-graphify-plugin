@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
-import { resolveGraphifyCliCommand } from './server-process.ts'
+import { resolveGraphifyCliCommand, terminateChildProcess } from './server-process.ts'
 import { writeGraphifyIndexMetadata } from './freshness.ts'
 
 export interface CommandInvocation {
@@ -152,8 +152,9 @@ function runGraphify(command: string, args: readonly string[], cwd: string, sign
     let stderr = ''
     let settled = false
     const onAbort = () => {
-      child.kill('SIGTERM')
-      settle(() => reject(new Error('Graphify command cancelled')))
+      terminateChildProcess(child).finally(() => {
+        settle(() => reject(new Error('Graphify command cancelled')))
+      })
     }
     const settle = (action: () => void) => {
       if (settled) return

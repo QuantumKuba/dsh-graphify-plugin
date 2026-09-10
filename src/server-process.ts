@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import type { ChildProcess } from 'node:child_process'
 import type { Config } from './config.ts'
 import type { GraphifyCommandRequest } from './commands.ts'
 
@@ -170,4 +171,55 @@ function findCommand(cmd: string): string | undefined {
     // Ignore stat errors
   }
   return undefined
+}
+
+/**
+ * Gracefully terminates a child process using SIGTERM, escalating to SIGKILL
+ * after a grace period if the process has not yet exited.
+ * Resolves when the process closes or immediately if already dead/closed.
+ */
+export function terminateChildProcess(
+  child: ChildProcess,
+  graceMs = 1500
+): Promise<void> {
+  return new Promise((resolve) => {
+    // If the child has already exited, resolve immediately
+    if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string' || child.killed) {
+      resolve()
+      return
+    }
+
+    let resolved = false
+    let killTimer: NodeJS.Timeout | null = null
+
+    const finish = () => {
+      if (resolved) return
+      resolved = true
+      if (killTimer) {
+        clearTimeout(killTimer)
+        killTimer = null
+      }
+      resolve()
+    }
+
+    child.once('close', finish)
+    child.once('error', finish)
+
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      finish()
+      return
+    }
+
+    killTimer = setTimeout(() => {
+      if (!resolved) {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // Ignore
+        }
+      }
+    }, graceMs)
+  })
 }
