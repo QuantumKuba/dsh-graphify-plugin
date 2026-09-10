@@ -168,6 +168,13 @@ export class GraphifyMcpClient {
    * next attempt, then waits for the state machine to reach `connected` or a terminal state.
    */
   private awaitReconnect(): Promise<void> {
+    if (this.isDisposed) {
+      return Promise.reject(new Error('GraphifyMcpClient has been disposed'))
+    }
+    if (this.state === 'connected' && this.client) {
+      return Promise.resolve()
+    }
+
     return new Promise<void>((resolve, reject) => {
       // Cancel the pending backoff timer so the next attempt fires immediately
       if (this.reconnectTimer) {
@@ -232,7 +239,7 @@ export class GraphifyMcpClient {
           const text = chunk.toString()
           this.stderrBuffer.push(text)
           this.stderrBufferBytes += text.length
-          // Enforce 50-line and 64 KB aggregate limits
+          // Enforce 50-chunk and 64 KB aggregate limits
           while (this.stderrBuffer.length > 50 || this.stderrBufferBytes > 65536) {
             const dropped = this.stderrBuffer.shift()
             if (dropped) this.stderrBufferBytes -= dropped.length

@@ -444,6 +444,61 @@ describe('GraphifyMcpClient', () => {
     }
   })
 
+  it('survives failed expedited reconnect handshake and successfully recovers on subsequent retry', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'graphify-expedite-fail-'))
+    const attemptFile = path.join(tempDir, 'attempt.txt')
+    const triggerFile = path.join(tempDir, 'trigger.txt')
+
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [flakyServerPath],
+      cwd: fixtureDir,
+      env: {
+        ...process.env,
+        FAIL_COUNT: '1',
+        ATTEMPT_FILE: attemptFile,
+        TRIGGER_FILE: triggerFile,
+      } as Record<string, string>,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 25,
+        maxDelayMs: 60,
+        maxAttempts: 5,
+      },
+    })
+
+    try {
+      // 1. Initial connection succeeds (no trigger file)
+      await client.init()
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // 2. Arm failure for the next attempt
+      fs.writeFileSync(triggerFile, 'fail')
+
+      // 3. Drop transport to enter reconnecting backoff
+      const transport = (client as unknown as { transport: { close: () => Promise<void> } }).transport
+      await transport.close()
+
+      await waitForState(client, 'reconnecting', 2000)
+      assert.equal(client.getConnectionState(), 'reconnecting')
+
+      // 4. While reconnecting, call a tool. This expedites reconnect immediately via awaitReconnect().
+      // That expedited attempt (attempt 1) will fail because FAIL_COUNT='1'.
+      // The client must not die or throw away its retry chain; it must stay in reconnecting,
+      // schedule attempt 2 via backoff timer, and succeed on attempt 2!
+      const result = await client.callTool('query_graph', { question: 'hello after failure' })
+      assert.ok(result.content?.[0]?.text?.includes('query_graph'))
+      assert.equal(client.getConnectionState(), 'connected')
+
+      // Subsequent tool call must also succeed
+      const result2 = await client.callTool('query_graph', { question: 'second query' })
+      assert.ok(result2.content?.[0]?.text?.includes('query_graph'))
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   it('fires onToolsChanged listener when server sends tools/list_changed notification', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-tools-notify-'))
     const notifyServerScript = path.join(tempDir, 'notify-server.mjs')

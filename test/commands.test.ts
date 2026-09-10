@@ -132,4 +132,48 @@ setInterval(() => {}, 1000)
 
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
+
+  it('does not resolve prematurely when child.killed is true before termination', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-quiescence-'))
+    const pidFile = path.join(tempDir, 'quiescence.pid')
+    const stubbornPath = path.join(__dirname, 'fixtures', 'stubborn-process.mjs')
+
+    const child = spawn(process.execPath, [stubbornPath], {
+      env: { ...process.env, PID_FILE: pidFile },
+      stdio: 'ignore',
+    })
+
+    for (let i = 0; i < 20 && !fs.existsSync(pidFile); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+    assert.ok(pid > 0)
+
+    // Pre-kill with SIGTERM (ignored by stubborn-process). This sets child.killed = true.
+    child.kill('SIGTERM')
+    assert.equal(child.killed, true, 'child.killed should be true after signal delivery')
+    assert.equal(child.exitCode, null, 'child should still be running')
+
+    // terminateChildProcess must NOT resolve immediately just because child.killed === true.
+    // It must wait for actual process exit/close (which requires SIGKILL escalation).
+    const termPromise = terminateChildProcess(child, 150)
+    const earlyCheck = await Promise.race([
+      termPromise.then(() => 'premature-resolve'),
+      new Promise((resolve) => setTimeout(() => resolve('still-pending'), 50)),
+    ])
+    assert.equal(earlyCheck, 'still-pending', 'terminateChildProcess must wait for close, not resolve on child.killed')
+
+    // Await full termination after SIGKILL
+    await termPromise
+
+    let isAlive = true
+    try {
+      process.kill(pid, 0)
+    } catch (err: unknown) {
+      if ((err as { code?: string }).code === 'ESRCH') isAlive = false
+    }
+    assert.equal(isAlive, false, 'Child must be dead after terminateChildProcess resolves')
+
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
 })

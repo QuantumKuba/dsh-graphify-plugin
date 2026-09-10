@@ -176,7 +176,8 @@ function findCommand(cmd: string): string | undefined {
 /**
  * Gracefully terminates a child process using SIGTERM, escalating to SIGKILL
  * after a grace period if the process has not yet exited.
- * Resolves when the process closes or immediately if already dead/closed.
+ * Resolves when the child process has confirmed closed/exited, or immediately
+ * if the process is already dead.
  */
 export function terminateChildProcess(
   child: ChildProcess,
@@ -184,7 +185,7 @@ export function terminateChildProcess(
 ): Promise<void> {
   return new Promise((resolve) => {
     // If the child has already exited, resolve immediately
-    if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string' || child.killed) {
+    if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string') {
       resolve()
       return
     }
@@ -199,17 +200,29 @@ export function terminateChildProcess(
         clearTimeout(killTimer)
         killTimer = null
       }
+      child.removeListener('close', finish)
+      child.removeListener('exit', finish)
+      child.removeListener('error', finish)
       resolve()
     }
 
     child.once('close', finish)
+    child.once('exit', finish)
     child.once('error', finish)
 
-    try {
-      child.kill('SIGTERM')
-    } catch {
+    // Re-check exit status in case child exited right before listeners attached
+    if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string') {
       finish()
       return
+    }
+
+    // Only send SIGTERM if a termination signal has not already been sent
+    if (!child.killed) {
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        // Signal error (e.g. process already dead ESRCH); wait for close or timeout
+      }
     }
 
     killTimer = setTimeout(() => {
@@ -223,3 +236,4 @@ export function terminateChildProcess(
     }, graceMs)
   })
 }
+
