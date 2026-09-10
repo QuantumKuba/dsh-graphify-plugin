@@ -12,25 +12,25 @@ export function getPackageVersion(): string {
   if (cachedVersion) return cachedVersion
 
   try {
-    const currentDir = path.dirname(fileURLToPath(import.meta.url))
-    const candidates = [
-      path.resolve(currentDir, '..', 'package.json'),
-      path.resolve(currentDir, 'package.json'),
-    ]
-    for (const candidate of candidates) {
+    let current = path.dirname(fileURLToPath(import.meta.url))
+    for (let i = 0; i < 5; i++) {
+      const candidate = path.join(current, 'package.json')
       if (fs.existsSync(candidate)) {
         const content = fs.readFileSync(candidate, 'utf8')
-        const parsed = JSON.parse(content) as { version?: string }
-        if (parsed.version) {
+        const parsed = JSON.parse(content) as { name?: string; version?: string }
+        if (parsed.name === 'dsh-graphify' && parsed.version) {
           cachedVersion = parsed.version
           return cachedVersion
         }
       }
+      const parent = path.dirname(current)
+      if (parent === current) break
+      current = parent
     }
   } catch {
-    // Fall back to default version if filesystem read fails
+    // Fall back safely if filesystem read fails
   }
 
-  cachedVersion = '0.2.0'
+  cachedVersion = 'unknown'
   return cachedVersion
 }

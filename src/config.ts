@@ -127,3 +127,41 @@ export const Config: Schema<Config> = Schema.object({
   }).default({ enabled: true, initialDelayMs: 500, maxDelayMs: 30000, maxAttempts: 10 }).description('Connection resilience options'),
   cwd: Schema.string().description('Explicit working directory for Graphify subprocess'),
 })
+
+/**
+ * Validates a resolved configuration object, throwing actionable errors if
+ * any parameters are invalid or out of bounds.
+ */
+export function validateConfig(config: Config): void {
+  if (typeof config.timeoutMs !== 'number' || config.timeoutMs <= 0 || !Number.isFinite(config.timeoutMs)) {
+    throw new Error(`Invalid dsh-graphify configuration: timeoutMs must be a positive number, got ${config.timeoutMs}.`)
+  }
+
+  if (config.toolMode !== 'compact' && config.toolMode !== 'full') {
+    throw new Error(`Invalid dsh-graphify configuration: toolMode must be 'compact' or 'full', got '${config.toolMode}'.`)
+  }
+
+  if (config.freshness) {
+    if (config.freshness.mode !== 'off' && config.freshness.mode !== 'warn' && config.freshness.mode !== 'auto') {
+      throw new Error(`Invalid dsh-graphify configuration: freshness.mode must be 'off', 'warn', or 'auto', got '${config.freshness.mode}'.`)
+    }
+    if (typeof config.freshness.updateTimeoutMs !== 'number' || config.freshness.updateTimeoutMs <= 0 || !Number.isFinite(config.freshness.updateTimeoutMs)) {
+      throw new Error(`Invalid dsh-graphify configuration: freshness.updateTimeoutMs must be a positive number, got ${config.freshness.updateTimeoutMs}.`)
+    }
+  }
+
+  if (config.reconnect) {
+    if (typeof config.reconnect.initialDelayMs !== 'number' || config.reconnect.initialDelayMs < 0 || !Number.isFinite(config.reconnect.initialDelayMs)) {
+      throw new Error(`Invalid dsh-graphify configuration: reconnect.initialDelayMs must be non-negative, got ${config.reconnect.initialDelayMs}.`)
+    }
+    if (typeof config.reconnect.maxDelayMs !== 'number' || config.reconnect.maxDelayMs < 0 || !Number.isFinite(config.reconnect.maxDelayMs)) {
+      throw new Error(`Invalid dsh-graphify configuration: reconnect.maxDelayMs must be non-negative, got ${config.reconnect.maxDelayMs}.`)
+    }
+    if (config.reconnect.maxDelayMs < config.reconnect.initialDelayMs) {
+      throw new Error(`Invalid dsh-graphify configuration: reconnect.maxDelayMs (${config.reconnect.maxDelayMs}) must be >= reconnect.initialDelayMs (${config.reconnect.initialDelayMs}).`)
+    }
+    if (typeof config.reconnect.maxAttempts !== 'number' || !Number.isInteger(config.reconnect.maxAttempts) || config.reconnect.maxAttempts < 0) {
+      throw new Error(`Invalid dsh-graphify configuration: reconnect.maxAttempts must be a non-negative integer, got ${config.reconnect.maxAttempts}.`)
+    }
+  }
+}

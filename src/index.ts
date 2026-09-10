@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { Config } from './config.ts'
+import { Config, validateConfig } from './config.ts'
 import { detectGraph } from './detector.ts'
 import { resolveGraphifyCommand, resolveGraphifyCliCommand, getRuntimeInfo } from './server-process.ts'
 import { GraphifyMcpClient } from './client.ts'
@@ -13,7 +13,7 @@ import { getPackageVersion } from './version.ts'
 
 export const name = 'dsh-graphify'
 export const inject = ['tools', 'systemPrompt']
-export { Config } from './config.ts'
+export { Config, validateConfig } from './config.ts'
 export * from './types.ts'
 export { detectGraph } from './detector.ts'
 export { GraphifyMcpClient } from './client.ts'
@@ -22,7 +22,13 @@ export { createGraphifyPromptSection, registerGraphifyPrompt } from './prompt.ts
 export { registerGraphifyCommand } from './commands.ts'
 export { resolveGraphifyCommand, resolveGraphifyCliCommand, getRuntimeInfo } from './server-process.ts'
 export { ProjectResolver } from './project-resolver.ts'
-export { checkGraphFreshness, ProjectUpdateCoalescer } from './freshness.ts'
+export {
+  checkGraphFreshness,
+  ProjectUpdateCoalescer,
+  writeGraphifyIndexMetadata,
+  readGraphifyIndexMetadata,
+  INDEX_METADATA_FILENAME,
+} from './freshness.ts'
 export { collectGraphifyStatus, formatGraphifyStatus } from './status.ts'
 export { getPackageVersion } from './version.ts'
 
@@ -35,6 +41,7 @@ export { getPackageVersion } from './version.ts'
  */
 export function apply(ctx: Context, config?: Config): void {
   const cfg = Config(config ?? ({} as Config))
+  validateConfig(cfg)
   const logger = typeof ctx.logger === 'function' ? ctx.logger('graphify') : undefined
 
   const resolver = new ProjectResolver(cfg)
