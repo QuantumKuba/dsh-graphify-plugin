@@ -68,7 +68,7 @@ describe('Graphify Plugin Integration', () => {
       assert.ok(promptText.includes('query_graph'))
 
       // 2. Verify native tools plus forward-compatible capability accessors and doctor status tool
-      assert.equal(registeredTools.size, 14)
+      assert.equal(registeredTools.size, 15)
       const expectedTools = [
         'query_graph',
         'get_node',
@@ -84,6 +84,7 @@ describe('Graphify Plugin Integration', () => {
         'graphify_capabilities',
         'graphify_call',
         'graphify_resource',
+        'graphify_project_resource',
       ]
       for (const name of expectedTools) {
         assert.ok(registeredTools.has(name), `Missing tool: ${name}`)

@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GraphifyMcpClient } from './client.ts'
 import type { Config } from './config.ts'
@@ -42,6 +43,7 @@ const PLUGIN_OWNED_TOOLS = new Set([
   'graphify_capabilities',
   'graphify_call',
   'graphify_resource',
+  'graphify_project_resource',
 ])
 
 /**
@@ -387,10 +389,10 @@ export function createGraphifyToolDefinitions(
       execute: (args, exec) => executeTool('triage_prs', (args as Record<string, unknown>) || {}, exec),
     },
 
-    // 12. graphify_resource
+    // 12. graphify_resource (raw MCP resource access — reads from the server's default project)
     {
       name: getPrefixedToolName('graphify_resource', prefix),
-      description: 'Read a Graphify MCP resource, including reports and analyses. Use graphify_capabilities to list resource URIs.',
+      description: 'Read a Graphify MCP resource by URI. Reads from the MCP server\'s default project, which may differ from the session project. Prefer graphify_project_resource for session-scoped reads.',
       parameters: {
         type: 'object',
         properties: { uri: { type: 'string', description: 'Exact Graphify MCP resource URI.' } },
@@ -408,6 +410,77 @@ export function createGraphifyToolDefinitions(
           } satisfies GraphifyToolOutput
         } catch (error) {
           return { text: `Error reading Graphify resource: ${String(error)}`, isError: true }
+        }
+      },
+    },
+
+    // 12b. graphify_project_resource (session-scoped local file reader)
+    {
+      name: getPrefixedToolName('graphify_project_resource', prefix),
+      description: 'Read a Graphify resource (report, wiki, stats) from the current session project. Session-scoped: reads local files via ProjectResolver, never leaks data across projects.',
+      parameters: {
+        type: 'object',
+        properties: {
+          resource: {
+            type: 'string',
+            enum: ['report', 'wiki', 'stats'],
+            description: 'Resource to read: report (GRAPH_REPORT.md), wiki (wiki/index.md), or stats (graph statistics summary).',
+          },
+          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to session workspace.' },
+        },
+        required: ['resource'],
+      },
+      output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
+      timeoutMs: config.timeoutMs,
+      execute: async (args, exec) => {
+        const rawArgs = (args as { resource: string; project_path?: string })
+        const project = resolver.resolve({
+          explicitPath: rawArgs.project_path,
+          toolContext: exec,
+        })
+        if (!project.hasGraph) {
+          return { text: 'No knowledge graph found for this project. Run `/graphify` to generate one.', isError: true }
+        }
+        try {
+          const { default: path } = await import('node:path')
+          let filePath: string | undefined
+          let fallbackMessage = ''
+          switch (rawArgs.resource) {
+            case 'report':
+              filePath = project.reportPath || path.join(project.graphDir, 'GRAPH_REPORT.md')
+              fallbackMessage = 'GRAPH_REPORT.md not found. The graph may not have generated a report.'
+              break
+            case 'wiki':
+              filePath = project.wikiIndexPath || path.join(project.graphDir, 'wiki', 'index.md')
+              fallbackMessage = 'wiki/index.md not found. The graph may not include a wiki.'
+              break
+            case 'stats': {
+              // Read graph.json directly for stats summary
+              if (!project.graphJsonPath || !fs.existsSync(project.graphJsonPath)) {
+                return { text: 'graph.json not found.', isError: true }
+              }
+              const stat = fs.statSync(project.graphJsonPath)
+              if (stat.size > 50 * 1024 * 1024) {
+                return { text: `graph.json is ${Math.round(stat.size / 1024 / 1024)}MB; too large for inline stats.`, isError: true }
+              }
+              const raw = fs.readFileSync(project.graphJsonPath, 'utf8')
+              const data = JSON.parse(raw) as { nodes?: unknown[]; links?: unknown[]; edges?: unknown[] }
+              const nodeCount = Array.isArray(data.nodes) ? data.nodes.length : 0
+              const edgeCount = Array.isArray(data.links) ? data.links.length : Array.isArray(data.edges) ? data.edges.length : 0
+              return {
+                text: `Graph Statistics for ${project.projectRoot}:\n  Nodes: ${nodeCount}\n  Edges: ${edgeCount}\n  Last Modified: ${stat.mtime.toISOString()}`,
+              }
+            }
+            default:
+              return { text: `Unknown resource type: ${rawArgs.resource}. Use report, wiki, or stats.`, isError: true }
+          }
+          if (filePath && fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, 'utf8')
+            return { text: content }
+          }
+          return { text: fallbackMessage, isError: true }
+        } catch (error) {
+          return { text: `Error reading project resource: ${String(error)}`, isError: true }
         }
       },
     },
@@ -462,7 +535,7 @@ export function createGraphifyToolDefinitions(
       'get_neighbors',
       'shortest_path',
       'graphify_status',
-      'graphify_resource',
+      'graphify_project_resource',
     ])
     return allDefinitions.filter((def) => {
       // Find matching base name

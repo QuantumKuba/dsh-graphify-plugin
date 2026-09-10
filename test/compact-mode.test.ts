@@ -31,14 +31,14 @@ describe('Compact Tool Mode and Dynamic Prefixing', () => {
     assert.deepEqual(names.sort(), [
       'get_neighbors',
       'get_node',
-      'graphify_resource',
+      'graphify_project_resource',
       'graphify_status',
       'query_graph',
       'shortest_path',
     ].sort())
   })
 
-  it('registers full 14-tool surface in full mode', () => {
+  it('registers full 15-tool surface in full mode', () => {
     const config = Config({
       command: process.execPath,
       args: [serverPath],
@@ -51,10 +51,12 @@ describe('Compact Tool Mode and Dynamic Prefixing', () => {
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    assert.equal(tools.length, 14)
+    assert.equal(tools.length, 15)
     assert.ok(tools.some((t) => t.name === 'god_nodes'))
     assert.ok(tools.some((t) => t.name === 'get_community'))
     assert.ok(tools.some((t) => t.name === 'list_prs'))
+    assert.ok(tools.some((t) => t.name === 'graphify_project_resource'))
+    assert.ok(tools.some((t) => t.name === 'graphify_resource'))
   })
 
   it('handles toolPrefix consistently without double-prefixing', () => {

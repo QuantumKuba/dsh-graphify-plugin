@@ -1,0 +1,97 @@
+import { describe, it } from 'node:test'
+import assert from 'node:assert/strict'
+import path from 'node:path'
+import fs from 'node:fs'
+import os from 'node:os'
+import { fileURLToPath } from 'node:url'
+import { Config } from '../src/config.ts'
+import { GraphifyMcpClient } from '../src/client.ts'
+import { createGraphifyToolDefinitions } from '../src/tools.ts'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const serverPath = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
+
+describe('Multi-Project Resource Isolation', () => {
+  it('isolates graphify_project_resource calls across concurrent sessions without leakage', async () => {
+    const tempDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-proj-a-'))
+    const tempDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-proj-b-'))
+
+    const graphDirA = path.join(tempDirA, 'graphify-out')
+    const graphDirB = path.join(tempDirB, 'graphify-out')
+    fs.mkdirSync(graphDirA, { recursive: true })
+    fs.mkdirSync(graphDirB, { recursive: true })
+    fs.mkdirSync(path.join(graphDirA, 'wiki'), { recursive: true })
+    fs.mkdirSync(path.join(graphDirB, 'wiki'), { recursive: true })
+
+    fs.writeFileSync(path.join(graphDirA, 'graph.json'), JSON.stringify({ nodes: [1, 2], links: [1] }))
+    fs.writeFileSync(path.join(graphDirB, 'graph.json'), JSON.stringify({ nodes: [1, 2, 3, 4], links: [1, 2, 3] }))
+
+    fs.writeFileSync(path.join(graphDirA, 'GRAPH_REPORT.md'), '# Architecture Report for Project Alpha\nConfidential A')
+    fs.writeFileSync(path.join(graphDirB, 'GRAPH_REPORT.md'), '# Architecture Report for Project Beta\nConfidential B')
+
+    fs.writeFileSync(path.join(graphDirA, 'wiki', 'index.md'), '# Wiki Alpha')
+    fs.writeFileSync(path.join(graphDirB, 'wiki', 'index.md'), '# Wiki Beta')
+
+    const config = Config({
+      command: process.execPath,
+      args: [serverPath],
+      toolMode: 'full',
+    })
+    const client = new GraphifyMcpClient({
+      command: process.execPath,
+      args: [serverPath],
+      cwd: tempDirA,
+    })
+
+    const tools = createGraphifyToolDefinitions(client, config)
+    const resourceTool = tools.find((t) => t.name === 'graphify_project_resource')
+    assert.ok(resourceTool, 'graphify_project_resource must be registered')
+
+    try {
+      // 1. Session A reads report
+      const execA = {
+        signal: new AbortController().signal,
+        agent: { session: { header: { cwd: tempDirA } } },
+      }
+      const resultA = await resourceTool.execute({ resource: 'report' }, execA)
+      assert.match(resultA.text, /Architecture Report for Project Alpha/)
+      assert.match(resultA.text, /Confidential A/)
+      assert.ok(!resultA.text.includes('Beta'))
+
+      // 2. Session B reads report
+      const execB = {
+        signal: new AbortController().signal,
+        agent: { session: { header: { cwd: tempDirB } } },
+      }
+      const resultB = await resourceTool.execute({ resource: 'report' }, execB)
+      assert.match(resultB.text, /Architecture Report for Project Beta/)
+      assert.match(resultB.text, /Confidential B/)
+      assert.ok(!resultB.text.includes('Alpha'))
+
+      // 3. Session A reads wiki
+      const wikiA = await resourceTool.execute({ resource: 'wiki' }, execA)
+      assert.match(wikiA.text, /Wiki Alpha/)
+
+      // 4. Session B reads wiki
+      const wikiB = await resourceTool.execute({ resource: 'wiki' }, execB)
+      assert.match(wikiB.text, /Wiki Beta/)
+
+      // 5. Stats isolation
+      const statsA = await resourceTool.execute({ resource: 'stats' }, execA)
+      assert.match(statsA.text, /Nodes: 2/)
+      assert.match(statsA.text, /Edges: 1/)
+
+      const statsB = await resourceTool.execute({ resource: 'stats' }, execB)
+      assert.match(statsB.text, /Nodes: 4/)
+      assert.match(statsB.text, /Edges: 3/)
+
+      // 6. Explicit project_path overrides session cwd
+      const overrideResult = await resourceTool.execute({ resource: 'report', project_path: tempDirB }, execA)
+      assert.match(overrideResult.text, /Architecture Report for Project Beta/)
+    } finally {
+      await client.dispose()
+      fs.rmSync(tempDirA, { recursive: true, force: true })
+      fs.rmSync(tempDirB, { recursive: true, force: true })
+    }
+  })
+})

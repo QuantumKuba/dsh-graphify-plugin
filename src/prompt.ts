@@ -11,9 +11,9 @@ import { ProjectResolver } from './project-resolver.ts'
  * dynamically honoring configured tool prefixes, compact/full tool modes, and project status.
  */
 export function createGraphifyPromptSection(
-  detectedGraph?: DetectedGraph | ResolvedProject | null,
+  _detectedGraph?: DetectedGraph | ResolvedProject | null,
   config?: Config,
-  resolver?: ProjectResolver
+  _resolver?: ProjectResolver
 ): PromptSection {
   const prefix = config?.toolPrefix || ''
   const isCompact = config?.toolMode === 'compact'
@@ -23,7 +23,7 @@ export function createGraphifyPromptSection(
   const neighborsTool = getPrefixedToolName('get_neighbors', prefix)
   const pathTool = getPrefixedToolName('shortest_path', prefix)
   const statusTool = getPrefixedToolName('graphify_status', prefix)
-  const resourceTool = getPrefixedToolName('graphify_resource', prefix)
+  const projectResourceTool = getPrefixedToolName('graphify_project_resource', prefix)
 
   return {
     name: 'graphify:guidance',
@@ -54,7 +54,7 @@ export function createGraphifyPromptSection(
       }
 
       lines.push(
-        `- Pre-generated reports and audits: use \`${resourceTool}\` (e.g. \`graphify://report\`).`,
+        `- Pre-generated reports and audits: use \`${projectResourceTool}\` (e.g. \`resource: 'report'\` or \`resource: 'wiki'\`).`,
         '',
         '### Authoritative Source Principle',
         '1. **Navigation first, source files authoritative**: Use Graphify to pinpoint relevant directories and files, then read the actual source files for implementation details.',
