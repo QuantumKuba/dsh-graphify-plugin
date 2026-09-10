@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-09-10
+
+### Added
+- **Official MCP SDK Integration**:
+  - Replaced ad-hoc JSON-RPC transport with `@modelcontextprotocol/sdk` (`Client` and `StdioClientTransport`).
+  - Added generation tracking to prevent race conditions and zombie subprocess leaks on reconnect.
+  - Implemented bounded exponential backoff reconnection (`reconnect.maxRetries`, `reconnect.initialDelayMs`, `reconnect.maxDelayMs`).
+  - Added stderr ring buffer retaining the last 50 lines / 64 KB for post-mortem diagnostics on crash.
+  - Implemented cooperative cancellation with `AbortSignal` across all transport calls.
+- **Diagnostic Doctor Tool (`graphify_status`)**:
+  - Added `graphify_status` tool reporting executable discovery, Python environment paths, MCP transport health, project resolution details, graph timestamps, tool mode, and staleness metrics.
+  - Generates structured status objects and formatted Markdown summaries with actionable remediation advice.
+- **Compact Tool Mode for 20B–30B Local LLMs**:
+  - Added `toolMode` configuration (`compact` vs `full`).
+  - Compact mode registers 6 high-signal tools (`graphify_status`, `query_graph`, `get_node`, `get_neighbors`, `god_nodes`, `shortest_path`) with concise parameter schemas to reduce context token waste and prevent tool hallucination on smaller models.
+- **Session-Scoped Multi-Workspace Resolution**:
+  - Added `ProjectResolver` honoring context precedence: explicit `project_path` > session cwd (`toolContext.agent.session.header.cwd` / `session.header.cwd`) > ancestor directory traversal > configured `config.cwd` > process fallback.
+  - Added mtime-validated caching with filesystem invalidation.
+- **Graph Freshness & Concurrency-Safe Auto-Update**:
+  - Added git- and mtime-based freshness detection (`freshness`: `warn` | `auto` | `off`).
+  - Injects non-intrusive staleness warnings into tool results when code modifications postdate graph generation.
+  - Built `ProjectUpdateCoalescer` providing mutex-locked deduplication for concurrent background graph indexing requests across sessions.
+- **Decision Policy Agent Prompting**:
+  - Rewrote system prompt guidance into an authoritative decision tree optimized for local coding models.
+  - Guides models through the standard navigation loop: Graphify for macro architecture -> direct source inspection -> editor -> test -> `/graphify update`.
+- **Schema Drift Detection**:
+  - Added `test/schema-drift.test.ts` and `src/schema-drift.ts` comparing live or mocked Graphify tool schemas against declared definitions to detect breaking changes and additions.
+  - Added `pnpm run test:drift` command wired into CI.
+- **Benchmark Specification**:
+  - Added `BENCHMARK.md` detailing an 8-category, 12-metric evaluation protocol comparing DeepSeek Harness agents with and without Graphify on 20B–30B local LLMs.
+- **Upstream DeepSeek Harness Compatibility CI**:
+  - Added `.github/workflows/dsh-compatibility.yml` testing plugin builds and contracts against upstream DeepSeek Harness releases (`dsh-session >=0.1.1-rc.2` through `0.1.5-alpha.2`, `cordis >=4.0.0` through `4.0.2`).
+
+### Changed
+- Bumped version to `0.2.0`.
+- Added dynamic versioning via `src/version.ts` to prevent stale client metadata.
+- Updated tool registration to use consistent namespace prefixing (`getPrefixedToolName`).
+
+---
+
 ## [0.1.3] - 2026-09-09
 
 ### Added
