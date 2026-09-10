@@ -226,7 +226,11 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
   } else if (status.overall === 'error') {
     lines.push('Recommendation: Graphify MCP server encountered an error. Check diagnostics above or verify Python/uv environment.')
   } else if (status.overall === 'unavailable') {
-    lines.push('Recommendation: Graphify runtime is unavailable. Verify installation with `uv tool install "graphifyy[mcp]"` or configure `command` in cordis.yml.')
+    if (status.mcp.state === 'reconnecting') {
+      lines.push('Recommendation: MCP connection is recovering. Graphify will be available when reconnection succeeds.')
+    } else {
+      lines.push('Recommendation: Graphify runtime is unavailable. Verify installation with `uv tool install "graphifyy[mcp]"` or configure `command` in cordis.yml.')
+    }
   } else {
     lines.push('Recommendation: Graph state is unknown. Inspect graphify-out/ and run `/graphify` if needed.')
   }

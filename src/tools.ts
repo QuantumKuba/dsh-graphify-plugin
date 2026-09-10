@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GraphifyMcpClient } from './client.ts'
 import type { Config } from './config.ts'
@@ -103,7 +104,7 @@ export function createGraphifyToolDefinitions(
       } else if (freshnessMode === 'auto') {
         const freshness = checkGraphFreshness(project)
         if (freshness.state === 'stale') {
-          const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal)
+          const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal, project.graphJsonPath)
           if (updateRes.success) {
             resolver.invalidate(project.projectRoot)
             // Re-resolve project and refresh metadata after update
@@ -442,7 +443,6 @@ export function createGraphifyToolDefinitions(
           return { text: 'No knowledge graph found for this project. Run `/graphify` to generate one.', isError: true }
         }
         try {
-          const { default: path } = await import('node:path')
           let filePath: string | undefined
           let fallbackMessage = ''
           switch (rawArgs.resource) {
@@ -474,9 +474,16 @@ export function createGraphifyToolDefinitions(
             default:
               return { text: `Unknown resource type: ${rawArgs.resource}. Use report, wiki, or stats.`, isError: true }
           }
-          if (filePath && fs.existsSync(filePath)) {
-            const content = fs.readFileSync(filePath, 'utf8')
-            return { text: content }
+          if (filePath) {
+            const resolvedFile = path.resolve(filePath)
+            const resolvedGraphDir = path.resolve(project.graphDir)
+            if (!resolvedFile.startsWith(resolvedGraphDir + path.sep) && resolvedFile !== resolvedGraphDir) {
+              return { text: 'Resource path escapes graph directory boundary.', isError: true }
+            }
+            if (fs.existsSync(resolvedFile)) {
+              const content = fs.readFileSync(resolvedFile, 'utf8')
+              return { text: content }
+            }
           }
           return { text: fallbackMessage, isError: true }
         } catch (error) {

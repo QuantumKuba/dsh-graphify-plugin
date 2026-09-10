@@ -94,6 +94,14 @@ describe('Compact Tool Mode and Dynamic Prefixing', () => {
     assert.ok(names.includes('graphify_get_node'))
     assert.ok(names.includes('graphify_status'))
     assert.ok(!names.includes('graphify_graphify_status'))
+    assert.deepEqual(names.sort(), [
+      'graphify_get_neighbors',
+      'graphify_get_node',
+      'graphify_project_resource',
+      'graphify_query_graph',
+      'graphify_shortest_path',
+      'graphify_status',
+    ].sort())
   })
 
   it('generates prompt decision policy reflecting prefixed names and compact mode', () => {

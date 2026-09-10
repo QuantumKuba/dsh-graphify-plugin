@@ -88,6 +88,11 @@ describe('Multi-Project Resource Isolation', () => {
       // 6. Explicit project_path overrides session cwd
       const overrideResult = await resourceTool.execute({ resource: 'report', project_path: tempDirB }, execA)
       assert.match(overrideResult.text, /Architecture Report for Project Beta/)
+
+      // 7. Unknown resource type returns error
+      const unknownResult = await resourceTool.execute({ resource: 'unsupported_resource' }, execA)
+      assert.equal(unknownResult.isError, true)
+      assert.match(unknownResult.text, /Unknown resource type: unsupported_resource/i)
     } finally {
       await client.dispose()
       fs.rmSync(tempDirA, { recursive: true, force: true })

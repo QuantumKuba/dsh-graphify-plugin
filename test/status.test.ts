@@ -182,4 +182,28 @@ describe('graphify_status doctor tool', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('formats recovering recommendation when mcp.state is reconnecting', () => {
+    const formatted = formatGraphifyStatus({
+      overall: 'unavailable',
+      projectRoot: '/test',
+      graphPath: '/test/graphify-out/graph.json',
+      graphExists: true,
+      nodeCount: 10,
+      edgeCount: 20,
+      communityCount: 2,
+      lastModified: null,
+      git: null,
+      freshness: { state: 'fresh' },
+      runtime: { command: 'graphify-mcp', source: 'configured' },
+      mcp: {
+        state: 'reconnecting',
+        reconnectAttempts: 3,
+        maxReconnectAttempts: 10,
+      },
+    })
+    assert.ok(formatted.includes('Graphify Status: UNAVAILABLE'))
+    assert.ok(formatted.includes('Recommendation: MCP connection is recovering. Graphify will be available when reconnection succeeds.'))
+    assert.ok(formatted.includes('(attempt 3/10)'))
+  })
 })
