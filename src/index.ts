@@ -50,6 +50,7 @@ export {
   INDEX_METADATA_FILENAME,
 } from './freshness.ts'
 export { collectGraphifyStatus, formatGraphifyStatus } from './status.ts'
+export { toLosslessJson } from './lossless-json.ts'
 export { getPackageVersion } from './version.ts'
 
 /**
