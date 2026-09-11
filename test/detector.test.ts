@@ -156,4 +156,24 @@ describe('detector & config', () => {
       fs.rmSync(intendedTarget, { recursive: true, force: true })
     }
   })
+
+  it('resolves project root correctly when custom graph is inside a nested subproject canonical graphify-out', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-nested-sub-'))
+    const subprojectDir = path.join(tempRepo, 'subproject')
+    const graphDir = path.join(subprojectDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    try {
+      // searchDir is /tempRepo, customGraphPath is 'subproject/graphify-out/graph.json'
+      // Basename of graphDir is 'graphify-out', so canonical layout inference must yield /tempRepo/subproject
+      const detected = detectGraph(tempRepo, 'subproject/graphify-out/graph.json')
+      assert.ok(detected)
+      assert.equal(detected.projectRoot, subprojectDir, 'Must resolve /tempRepo/subproject, not /tempRepo')
+      assert.equal(detected.graphJsonPath, graphJson)
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true })
+    }
+  })
 })

@@ -16,6 +16,9 @@ import {
   evaluateAutoUpdateEligibility,
   performPostUpdateValidation,
   getChangedSourceInventory,
+  hashFileContent,
+  computeWorkingTreeFingerprint,
+  captureIndexedPathStates,
 } from '../src/freshness.ts'
 import type { ResolvedProject } from '../src/types.ts'
 
@@ -1100,5 +1103,395 @@ describe('Graph Freshness and Coalescing', () => {
     assert.equal(resB.success, true)
 
     fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('git diff failure during baseline capture prevents trusted baseline and auto-update', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-diff-fail-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Working tree modification
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 2')
+
+    // Mock spawnSync to fail when 'diff' command is issued
+    const originalSpawnSync = spawnSync
+    const mockSpawnSync: typeof spawnSync = ((cmd: string, args?: readonly string[], opts?: any) => {
+      if (cmd === 'git' && args && args[0] === 'diff') {
+        return { status: 1, stdout: '', stderr: 'git diff simulated failure', error: new Error('diff error') } as any
+      }
+      return originalSpawnSync(cmd, args as any, opts)
+    }) as any
+
+    try {
+      const meta = writeGraphifyIndexMetadata(tempDir, graphJson, { spawnSync: mockSpawnSync })
+      assert.ok(meta, 'Metadata object should be written')
+      assert.equal(meta.git?.baselineComplete, false, 'baselineComplete must NOT be true on git diff failure')
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.notEqual(freshness.state, 'fresh', 'Graph with incomplete baseline must never report FRESH')
+      assert.equal(freshness.state, 'stale')
+      assert.equal(freshness.baselineAvailable, false)
+
+      const eligibility = evaluateAutoUpdateEligibility(project)
+      assert.notEqual(eligibility.kind, 'eligible', 'Auto-update must not be eligible with incomplete baseline')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('git ls-files failure during baseline capture prevents trusted baseline and auto-update', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-ls-fail-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Untracked file
+    fs.writeFileSync(path.join(tempDir, 'new.ts'), 'export const b = 2')
+
+    const originalSpawnSync = spawnSync
+    const mockSpawnSync: typeof spawnSync = ((cmd: string, args?: readonly string[], opts?: any) => {
+      if (cmd === 'git' && args && args[0] === 'ls-files') {
+        return { status: 1, stdout: '', stderr: 'git ls-files simulated failure', error: new Error('ls-files error') } as any
+      }
+      return originalSpawnSync(cmd, args as any, opts)
+    }) as any
+
+    try {
+      const meta = writeGraphifyIndexMetadata(tempDir, graphJson, { spawnSync: mockSpawnSync })
+      assert.ok(meta)
+      assert.equal(meta.git?.baselineComplete, false, 'baselineComplete must NOT be true on git ls-files failure')
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.notEqual(freshness.state, 'fresh')
+      assert.equal(freshness.baselineAvailable, false)
+
+      const eligibility = evaluateAutoUpdateEligibility(project)
+      assert.notEqual(eligibility.kind, 'eligible')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('tracked dirty file hash failure prevents trusted baseline and auto-update', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-tracked-hash-fail-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 2')
+
+    // Injected hashFileContent that fails for app.ts
+    const mockHash = (filePath: string) => {
+      if (filePath.endsWith('app.ts')) return undefined
+      return hashFileContent(filePath)
+    }
+
+    try {
+      const meta = writeGraphifyIndexMetadata(tempDir, graphJson, { hashFileContent: mockHash })
+      assert.ok(meta)
+      assert.equal(meta.git?.baselineComplete, false, 'baselineComplete must be false on tracked file hash failure')
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.notEqual(freshness.state, 'fresh')
+      assert.equal(freshness.baselineAvailable, false)
+
+      const eligibility = evaluateAutoUpdateEligibility(project)
+      assert.notEqual(eligibility.kind, 'eligible')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('untracked file hash failure prevents trusted baseline and auto-update', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-untracked-hash-fail-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    fs.writeFileSync(path.join(tempDir, 'untracked.ts'), 'export const u = 100')
+
+    const mockHash = (filePath: string) => {
+      if (filePath.endsWith('untracked.ts')) return undefined
+      return hashFileContent(filePath)
+    }
+
+    try {
+      const meta = writeGraphifyIndexMetadata(tempDir, graphJson, { hashFileContent: mockHash })
+      assert.ok(meta)
+      assert.equal(meta.git?.baselineComplete, false, 'baselineComplete must be false on untracked file hash failure')
+
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.notEqual(freshness.state, 'fresh')
+      assert.equal(freshness.baselineAvailable, false)
+
+      const eligibility = evaluateAutoUpdateEligibility(project)
+      assert.notEqual(eligibility.kind, 'eligible')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('adversarial regression: hash failure during indexing followed by revert to clean HEAD never becomes false FRESH', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-adv-revert-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'doc' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    // HEAD semantic file = A
+    fs.writeFileSync(path.join(tempDir, 'doc.md'), 'Content A')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Working file modified to B
+    fs.writeFileSync(path.join(tempDir, 'doc.md'), 'Content B')
+
+    // Simulate hash failure for B during baseline capture
+    const mockHash = (filePath: string) => {
+      if (filePath.endsWith('doc.md')) return undefined
+      return hashFileContent(filePath)
+    }
+
+    // Graph indexed from B with simulated hash failure
+    const meta = writeGraphifyIndexMetadata(tempDir, graphJson, { hashFileContent: mockHash })
+    assert.ok(meta)
+    assert.equal(meta.git?.baselineComplete, false, 'Baseline must be incomplete')
+
+    // Revert file to A -> working tree is now clean relative to HEAD A
+    spawnSync('git', ['checkout', '--', 'doc.md'], { cwd: tempDir })
+    assert.equal(fs.readFileSync(path.join(tempDir, 'doc.md'), 'utf8'), 'Content A')
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    // Must NOT become FRESH because the indexed baseline was incomplete!
+    const freshness = checkGraphFreshness(project)
+    assert.notEqual(freshness.state, 'fresh', 'Must NOT become false FRESH after reverting when baseline was incomplete')
+    assert.equal(freshness.state, 'stale')
+    assert.match(freshness.reason, /incomplete or untrusted source-state baseline/i)
+
+    const eligibility = evaluateAutoUpdateEligibility(project)
+    assert.notEqual(eligibility.kind, 'eligible')
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('symlink unchanged preserves freshness, while retargeting to equal-content file is detected as STALE', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-symlink-test-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'link' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+
+    // Create target A and target B with IDENTICAL contents
+    fs.writeFileSync(path.join(tempDir, 'target-a.ts'), 'export const x = 42\n')
+    fs.writeFileSync(path.join(tempDir, 'target-b.ts'), 'export const x = 42\n')
+
+    // Create symlink pointing to target-a.ts
+    const linkPath = path.join(tempDir, 'link.ts')
+    fs.symlinkSync('target-a.ts', linkPath)
+
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Checkpoint clean working tree
+    const meta = writeGraphifyIndexMetadata(tempDir, graphJson)
+    assert.ok(meta)
+    assert.equal(meta.git?.baselineComplete, true)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+
+    // 1. Unchanged symlink -> FRESH
+    const freshCheck = checkGraphFreshness(project)
+    assert.equal(freshCheck.state, 'fresh', 'Unchanged symlink must report FRESH')
+
+    // 2. Retarget symlink to target-b.ts (target contents are 100% byte-identical!)
+    fs.unlinkSync(linkPath)
+    fs.symlinkSync('target-b.ts', linkPath)
+
+    // Symlink target contents are unchanged, but symlink identity changed! Must be STALE!
+    const staleCheck = checkGraphFreshness(project)
+    assert.equal(staleCheck.state, 'stale', 'Retargeted symlink must be detected as STALE despite identical target content')
+
+    const inventory = getChangedSourceInventory(tempDir, meta, graphJson)
+    assert.equal(inventory.complete, true)
+    const linkChange = inventory.files.find(f => f.path === 'link.ts')
+    assert.ok(linkChange, 'Inventory must detect link.ts as changed')
+    assert.equal(linkChange.status, 'modified')
+
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  it('outside-root symlink fails closed and does not establish trusted baseline', () => {
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-outside-symlink-'))
+    const tempDir = path.join(parentDir, 'repo')
+    fs.mkdirSync(tempDir)
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'link' }], links: [] }))
+
+    // Create outside target file in parentDir
+    const outsideTarget = path.join(parentDir, 'outside.ts')
+    fs.writeFileSync(outsideTarget, 'export const outside = true\n')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Create untracked symlink escaping projectRoot
+    const linkPath = path.join(tempDir, 'outside-link.ts')
+    fs.symlinkSync('../outside.ts', linkPath)
+
+    // hashFileContent on outside-root symlink must return undefined
+    const hash = hashFileContent(linkPath, tempDir)
+    assert.equal(hash, undefined, 'hashFileContent must return undefined for outside-root symlink')
+
+    // Baseline capture must fail closed
+    const baseline = captureIndexedPathStates(tempDir)
+    assert.equal(baseline.complete, false, 'Baseline capture must fail closed with outside-root symlink')
+
+    const meta = writeGraphifyIndexMetadata(tempDir, graphJson)
+    assert.ok(meta)
+    assert.equal(meta.git?.baselineComplete, false)
+
+    const project: ResolvedProject = {
+      projectRoot: tempDir,
+      graphJsonPath: graphJson,
+      graphDir,
+      hasGraph: true,
+      mtimeMs: fs.statSync(graphJson).mtimeMs,
+    }
+    assert.notEqual(checkGraphFreshness(project).state, 'fresh')
+
+    fs.rmSync(parentDir, { recursive: true, force: true })
+  })
+
+  it('cleans up temporary metadata files on write failure while leaving existing metadata untouched', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-temp-cleanup-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.writeFileSync(path.join(tempDir, 'app.ts'), 'export const a = 1')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    // Write initial valid metadata
+    const initialMeta = writeGraphifyIndexMetadata(tempDir, graphJson)
+    assert.ok(initialMeta)
+    const metaPath = path.join(graphDir, '.dsh-graphify-index.json')
+    const initialContent = fs.readFileSync(metaPath, 'utf8')
+
+    // Temporarily mock fs.renameSync to throw an error
+    const originalRename = fs.renameSync
+    let renameAttempted = false
+    ;(fs as any).renameSync = () => {
+      renameAttempted = true
+      throw new Error('simulated disk failure on rename')
+    }
+
+    try {
+      const failedWrite = writeGraphifyIndexMetadata(tempDir, graphJson)
+      assert.equal(failedWrite, null, 'Failed write must return null')
+      assert.equal(renameAttempted, true, 'Rename must have been attempted')
+
+      // Existing metadata must remain completely untouched
+      const currentContent = fs.readFileSync(metaPath, 'utf8')
+      assert.equal(currentContent, initialContent, 'Existing metadata must not be corrupted or overwritten')
+
+      // No stray .tmp files left in graphDir
+      const remainingFiles = fs.readdirSync(graphDir)
+      const tmpFiles = remainingFiles.filter(f => f.includes('.tmp'))
+      assert.equal(tmpFiles.length, 0, `No temporary files should remain, found: ${tmpFiles.join(', ')}`)
+    } finally {
+      fs.renameSync = originalRename
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })

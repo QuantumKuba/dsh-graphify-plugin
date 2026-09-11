@@ -40,18 +40,17 @@ export function detectGraph(
       if (graphJsonPath && graphDir) {
         // Authoritative project root resolution order:
         // 1. .graphify_root marker beside graph.json, if valid and points to an existing directory
-        // 2. Calling session root (searchDir), ONLY when evidence binds the graph to that project
-        //    (customGraphPath was relative, or resolved graph path is contained within searchDir)
-        // 3. Canonical layout inference (path.basename(graphDir) === 'graphify-out' -> path.dirname(graphDir))
+        // 2. Canonical layout inference (path.basename(graphDir) === 'graphify-out' -> path.dirname(graphDir))
+        // 3. Calling session root (searchDir), when evidence binds the graph to that project for noncanonical custom outputs
         // 4. Fallback: graphDir
         let projectRoot: string
         const markerRoot = readValidGraphifyRoot(graphDir)
         if (markerRoot) {
           projectRoot = markerRoot
-        } else if (isBoundToSearchDir(searchDir, customGraphPath, graphJsonPath)) {
-          projectRoot = path.resolve(searchDir)
         } else if (path.basename(graphDir) === 'graphify-out') {
           projectRoot = path.dirname(graphDir)
+        } else if (isBoundToSearchDir(searchDir, customGraphPath, graphJsonPath)) {
+          projectRoot = path.resolve(searchDir)
         } else {
           projectRoot = graphDir
         }

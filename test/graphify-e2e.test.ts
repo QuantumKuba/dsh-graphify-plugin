@@ -121,9 +121,8 @@ describe('Graphify release contract', () => {
     spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
     spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
 
-    // Create initial repo with a python file and a markdown file
+    // Create initial repo with a python file
     fs.writeFileSync(path.join(tempDir, 'calc.py'), 'def add(a, b):\n    return a + b\n')
-    fs.writeFileSync(path.join(tempDir, 'notes.md'), '# Calculator Notes\nExplains calc.py\n')
     spawnSync('git', ['add', '.'], { cwd: tempDir })
     spawnSync('git', ['commit', '-m', 'initial commit'], { cwd: tempDir })
 
@@ -140,7 +139,7 @@ describe('Graphify release contract', () => {
     try {
       // 1. Build graph from dirty working tree using real /graphify build .
       const buildRes = await command!.handler({
-        rawInput: 'build . --no-viz --no-cluster --code-only',
+        rawInput: 'build . --no-viz --no-cluster',
         agent: { session: { header: { cwd: tempDir } } },
         signal: new AbortController().signal,
       })
@@ -159,6 +158,7 @@ describe('Graphify release contract', () => {
       const meta = readGraphifyIndexMetadata(tempDir, graphJson)
       assert.ok(meta)
       assert.equal(meta.version, 3)
+      assert.equal(meta.git?.baselineComplete, true)
       assert.equal(checkGraphFreshness(project).state, 'fresh')
 
       // 2. Perform safe code-only modification: add multiply function to calc.py
@@ -218,6 +218,16 @@ describe('Graphify release contract', () => {
 
       // Graph must remain STALE (no false-fresh!)
       assert.equal(checkGraphFreshness(project).state, 'stale')
+
+      // 7. Verify /graphify build . --code-only unlinks metadata and warns caller
+      const codeOnlyBuildRes = await command!.handler({
+        rawInput: 'build . --no-viz --no-cluster --code-only',
+        agent: { session: { header: { cwd: tempDir } } },
+        signal: new AbortController().signal,
+      })
+      assert.equal(codeOnlyBuildRes.kind, 'success')
+      assert.match(codeOnlyBuildRes.text || '', /does not establish a full-corpus freshness baseline/i)
+      assert.equal(readGraphifyIndexMetadata(tempDir, graphJson), null)
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }

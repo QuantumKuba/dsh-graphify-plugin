@@ -5,6 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
 import { resolveGraphifyCliCommand, terminateChildProcess } from './server-process.ts'
 import {
+  INDEX_METADATA_FILENAME,
   readGraphifyIndexMetadata,
   writeGraphifyIndexMetadata,
   performPostUpdateValidation,
@@ -137,14 +138,41 @@ export function registerGraphifyCommand(
         const canonicalGraphJson = path.join(request.projectRoot, 'graphify-out', 'graph.json')
 
         if (request.operation === 'build') {
+          const isCodeOnly = request.flags.includes('--code-only')
           const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
-          if (performPostUpdateValidation(request.projectRoot, canonicalGraphJson)) {
+
+          if (isCodeOnly) {
+            // --code-only builds skip semantic/document sources; do not establish full-corpus baseline.
+            // Best-effort unlink preexisting index metadata so old baseline is not falsely assumed for new graph.
             try {
-              writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+              const metaPath = path.join(path.dirname(canonicalGraphJson), INDEX_METADATA_FILENAME)
+              if (fs.existsSync(metaPath)) {
+                fs.unlinkSync(metaPath)
+              }
+            } catch {
+              // Ignore unlink error
+            }
+            return {
+              kind: 'success',
+              text: `${text}\n\nNote: Graphify code-only build completed. Because --code-only skips semantic/document sources, this build does not establish a full-corpus freshness baseline.`,
+            }
+          }
+
+          if (performPostUpdateValidation(request.projectRoot, canonicalGraphJson)) {
+            let meta = null
+            try {
+              meta = writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
             } catch {
               // Metadata recording failure ignored
             }
-            return { kind: 'success', text }
+            if (meta?.git?.baselineComplete === true) {
+              return { kind: 'success', text }
+            } else {
+              return {
+                kind: 'success',
+                text: `${text}\n\nWarning: Graphify build completed, but dsh-graphify could not capture a complete source-state baseline. Freshness remains unverified.`,
+              }
+            }
           } else {
             return {
               kind: 'success',
@@ -162,12 +190,13 @@ export function registerGraphifyCommand(
           priorMeta !== null &&
           priorMeta.version === 3 &&
           priorMeta.git !== undefined &&
+          priorMeta.git.baselineComplete === true &&
           priorMeta.git.indexedPaths !== undefined
 
         if (!isTrustworthyV3) {
           eligibleForCheckpoint = false
           checkpointBlockReason =
-            'Freshness metadata predates source-state tracking. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to establish a trustworthy freshness baseline.'
+            'Freshness metadata predates source-state tracking or has incomplete baseline. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to establish a trustworthy freshness baseline.'
         } else {
           const inventory = getChangedSourceInventory(request.projectRoot, priorMeta, canonicalGraphJson)
           if (!inventory.complete) {
@@ -195,12 +224,20 @@ export function registerGraphifyCommand(
             const postInventory = getChangedSourceInventory(request.projectRoot, priorMeta, canonicalGraphJson)
             const postUnsupported = postInventory.complete ? postInventory.files.filter((f) => !isSafeChange(f)) : []
             if (postInventory.complete && postUnsupported.length === 0) {
+              let updatedMeta = null
               try {
-                writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+                updatedMeta = writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
               } catch {
                 // Ignore metadata recording failure
               }
-              return { kind: 'success', text }
+              if (updatedMeta?.git?.baselineComplete === true) {
+                return { kind: 'success', text }
+              } else {
+                return {
+                  kind: 'success',
+                  text: `${text}\n\nWarning: Graphify incremental update completed, but dsh-graphify could not capture a complete source-state baseline. Freshness remains unverified.`,
+                }
+              }
             } else {
               return {
                 kind: 'success',

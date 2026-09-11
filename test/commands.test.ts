@@ -467,4 +467,64 @@ process.exit(0)
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('/graphify build . --code-only succeeds without establishing a full-corpus freshness baseline', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-cmd-codeonly-'))
+    const graphDir = path.join(tempDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+
+    spawnSync('git', ['init'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.name', 'Tester'], { cwd: tempDir })
+    spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tempDir })
+    fs.mkdirSync(path.join(tempDir, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(tempDir, 'src', 'app.ts'), 'export const a = 1')
+    fs.writeFileSync(path.join(tempDir, 'architecture.md'), '# Architecture')
+    spawnSync('git', ['add', '.'], { cwd: tempDir })
+    spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir })
+
+    const mockCli = path.join(tempDir, 'mock-codeonly-build.mjs')
+    fs.writeFileSync(
+      mockCli,
+      `
+import fs from 'node:fs'
+fs.writeFileSync(${JSON.stringify(graphJson)}, JSON.stringify({ nodes: [{ id: 'app' }], links: [] }))
+process.exit(0)
+      `.trim()
+    )
+
+    const ctx = new Context()
+    let command: CommandDefinition | undefined
+    ctx.provide('commands')
+    ctx.commands = { register(def: CommandDefinition) { command = def; return () => {} } }
+    const config = Config({ cliCommand: process.execPath, cliArgs: [mockCli] })
+    registerGraphifyCommand(ctx, config, tempDir)
+
+    try {
+      const res = await command!.handler({
+        rawInput: 'build . --code-only',
+        agent: { session: { header: { cwd: tempDir } } },
+        signal: new AbortController().signal,
+      })
+      assert.equal(res.kind, 'success')
+      assert.match(res.text || '', /does not establish a full-corpus freshness baseline/i)
+
+      // No trusted v3 metadata written
+      const meta = readGraphifyIndexMetadata(tempDir, graphJson)
+      assert.equal(meta, null, 'Code-only build must NOT establish full-corpus index metadata')
+
+      // Status cannot become metadata-backed fresh
+      const project: ResolvedProject = {
+        projectRoot: tempDir,
+        graphJsonPath: graphJson,
+        graphDir,
+        hasGraph: true,
+        mtimeMs: fs.statSync(graphJson).mtimeMs,
+      }
+      const freshness = checkGraphFreshness(project)
+      assert.notEqual(freshness.strategy, 'metadata', 'Cannot have metadata-backed freshness')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

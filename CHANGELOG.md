@@ -40,7 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upstream DeepSeek Harness Compatibility CI**:
   - Added `.github/workflows/dsh-compatibility.yml` verifying plugin builds and contracts across supported DeepSeek Harness dependency versions.
 
-### Fixed
+- **Fail-Closed Freshness Baseline Capture**:
+  - Hardened `captureIndexedPathStates` and `computeWorkingTreeFingerprint` so any failure during `git diff`, `git ls-files`, or file content hashing immediately marks the baseline incomplete (`baselineComplete: false`).
+  - Updated metadata v3 evaluation (`checkMetadataGitFreshness`, `checkGraphFreshness`, `getChangedSourceInventory`, `evaluateAutoUpdateEligibility`) to require `baselineComplete === true`. Incomplete baselines immediately report `stale` and reject auto-update eligibility, guaranteeing an unverified tree can never report false-fresh.
+- **Symlink Identity Hashing & Boundary Containment**:
+  - Implemented link identity hashing for symbolic links (`SHA-256("symlink\0" + readlink(path))`), ensuring retargeted symlinks trigger staleness detection even when file contents match.
+  - Added strict project root containment validation for symlinks; symlinks pointing outside the repository root fail baseline capture closed.
+- **`/graphify build --code-only` Baseline Gating**:
+  - Gated metadata generation on `/graphify build`: explicit `--code-only` builds bypass v3 metadata generation, clean up any preexisting metadata, and warn the caller that a full build is required to establish an incremental freshness baseline.
+- **Atomic Temp File Cleanup**:
+  - Wrapped atomic metadata write (`.tmp` file write/fsync/rename) in a `try...finally` block with best-effort `.tmp` removal on write or rename failure, preventing orphan temporary files.
+- **Nested Canonical Graph Root Precedence**:
+  - Prioritized canonical layout detection (`path.basename(graphDir) === 'graphify-out'`) over session root fallback for custom graph paths, correctly resolving nested subproject roots.
+- **Conservative Code Extension Verification**:
+  - Confirmed `PROVEN_CODE_EXTENSIONS` against Graphify v0.9.57 built-in AST extractors (`graphify.detect.CODE_EXTENSIONS`), ensuring only proven language extractors participate in auto-update.
 - **False-Fresh Prevention & Metadata v3 Per-Path Tracking**:
   - Fixed fundamental freshness baseline flaw where reverting a dirty file to Git HEAD could cause false-fresh graph reporting.
   - Metadata v3 captures `indexedPaths` mapping modified files, untracked files, and deletions to exact content hashes at graph-index time.
@@ -55,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Custom `graphPath` Canonical Integrity & Root Resolution**:
   - Prevented false-fresh metadata recording on custom graphPath targets when `graphify update` or `/graphify` updates the canonical project graph.
   - Fixed relative `graphPath` root detection edge case: relative paths escaping search directory (e.g. `../graphify-out/graph.json` from a nested directory) correctly bind to the parent canonical project root rather than incorrectly binding to the child search directory.
-  - Implemented 4-tier project-root resolution for explicit graphs: `.graphify_root` marker validation, evidence-checked session root association, canonical layout inference, and directory fallback.
+  - Implemented 4-tier project-root resolution for explicit graphs: `.graphify_root` marker validation, canonical layout inference, evidence-checked session root association, and directory fallback.
 - **Git Staging Invariance**:
   - Removed git index/staging (`--cached`) from working-tree fingerprinting while maintaining binary correctness (`--binary`) and untracked file content hashing.
   - Staging (`git add`) or unstaging (`git reset`) identical file bytes never alters freshness state.
