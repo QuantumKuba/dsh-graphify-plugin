@@ -21,6 +21,7 @@ import {
   writeGraphifyIndexMetadata,
 } from './freshness.ts'
 import { collectGraphifyStatus, formatGraphifyStatus } from './status.ts'
+import { toLosslessJson } from './lossless-json.ts'
 
 export interface GraphifyToolOutput {
   text: string
@@ -207,17 +208,17 @@ export function createGraphifyToolDefinitions(
       const result = await client.callTool(rawName, args, execution?.signal, config.timeoutMs)
       const rawText = result.content?.map((c) => c.text || '').join('\n') || ''
       const text = stalenessNotice ? `${stalenessNotice}${rawText}` : rawText
-      return {
+      return toLosslessJson({
         text,
         isError: result.isError || false,
         meta: result,
-      }
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      return {
+      return toLosslessJson({
         text: `Error executing ${rawName}: ${message}`,
         isError: true,
-      }
+      })
     }
   }
 
@@ -346,16 +347,15 @@ export function createGraphifyToolDefinitions(
           try {
             validateProjectPathAccess(explicitPath, exec, config)
           } catch (err) {
-            return {
+            return toLosslessJson({
               text: `Error executing graphify_status: ${(err as Error).message}`,
               overall: 'error',
               projectRoot: explicitPath,
-              graphPath: undefined,
               graphExists: false,
               freshness: { state: 'unknown', reason: (err as Error).message },
               mcpState: client.getConnectionState(),
               isError: true,
-            }
+            })
           }
         }
         const project = resolver.resolve({
@@ -365,17 +365,17 @@ export function createGraphifyToolDefinitions(
         const shouldProbe = rawArgs.probe !== false
         const status = await collectGraphifyStatus(project, client, config, { probe: shouldProbe })
         const text = formatGraphifyStatus(status)
-        return {
+        return toLosslessJson({
           text,
           overall: status.overall,
           projectRoot: status.projectRoot,
-          graphPath: status.graphPath ?? undefined,
+          ...(status.graphPath ? { graphPath: status.graphPath } : {}),
           graphExists: status.graphExists,
           freshness: status.freshness,
           mcpState: status.mcp.state,
           isError: status.overall === 'error',
           meta: status,
-        }
+        })
       },
     },
 
@@ -499,12 +499,12 @@ export function createGraphifyToolDefinitions(
         const uri = (args as { uri: string }).uri
         try {
           const resource = await client.readResource(uri, exec.signal, config.timeoutMs)
-          return {
+          return toLosslessJson({
             text: resource.contents.map((content) => content.text || content.blob || '').join('\n'),
             meta: resource,
-          } satisfies GraphifyToolOutput
+          }) satisfies GraphifyToolOutput
         } catch (error) {
-          return { text: `Error reading Graphify resource: ${String(error)}`, isError: true }
+          return toLosslessJson({ text: `Error reading Graphify resource: ${String(error)}`, isError: true })
         }
       },
     },
@@ -632,12 +632,12 @@ export function createGraphifyToolDefinitions(
       execute: async (_args) => {
         try {
           const [tools, resources] = await Promise.all([client.listTools(), client.listResources()])
-          return {
+          return toLosslessJson({
             text: JSON.stringify({ tools, resources }, null, 2),
             meta: { tools, resources },
-          } satisfies GraphifyToolOutput
+          }) satisfies GraphifyToolOutput
         } catch (error) {
-          return { text: `Error listing Graphify capabilities: ${String(error)}`, isError: true }
+          return toLosslessJson({ text: `Error listing Graphify capabilities: ${String(error)}`, isError: true })
         }
       },
     },
