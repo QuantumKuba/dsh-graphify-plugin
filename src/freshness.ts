@@ -653,17 +653,18 @@ export function checkGraphFreshness(
 
   // 1. Check durable index metadata first if available (respects custom graphPath)
   const metadata = readGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
-  const isCanonical = isCanonicalGraphForProject(project.projectRoot, project.graphJsonPath)
   if (metadata && metadata.git) {
+    const isCanonical = isCanonicalGraphForProject(project.projectRoot, project.graphJsonPath)
     const metaGitCheck = checkMetadataGitFreshness(project.projectRoot, metadata, project.graphJsonPath)
     if (metaGitCheck) {
       const baselineAvailable = metadata.version === 3 && metadata.git.baselineComplete === true && metadata.git.indexedPaths !== undefined
-      let autoUpdateEligible: boolean | undefined
-      let autoUpdateBlockReason: string | undefined
+      const autoUpdateProps: { autoUpdateEligible?: boolean; autoUpdateBlockReason?: string } = {}
       if (metaGitCheck.state === 'stale') {
         const eligibility = evaluateAutoUpdateEligibility(project)
-        autoUpdateEligible = eligibility.kind === 'eligible'
-        autoUpdateBlockReason = eligibility.kind !== 'eligible' ? eligibility.reason : undefined
+        autoUpdateProps.autoUpdateEligible = eligibility.kind === 'eligible'
+        if (eligibility.kind !== 'eligible' && eligibility.reason) {
+          autoUpdateProps.autoUpdateBlockReason = eligibility.reason
+        }
       }
       return {
         ...metaGitCheck,
@@ -671,8 +672,7 @@ export function checkGraphFreshness(
         metadataVersion: metadata.version,
         baselineAvailable,
         isCanonicalTarget: isCanonical,
-        autoUpdateEligible,
-        autoUpdateBlockReason,
+        ...autoUpdateProps,
       }
     }
   }
@@ -796,15 +796,17 @@ function checkMetadataGitFreshness(
         }
       }
 
-      const changedFilesCount = inventory.complete ? inventory.files.length : undefined
-      const changedFilesSample = inventory.complete ? inventory.files.slice(0, 5).map(f => f.path) : undefined
       return {
         state: 'stale',
         reason: inventory.complete
           ? `Working tree changed since graph was indexed (${inventory.files.length} file(s) modified, added, or deleted)`
           : (inventory.reason || 'Working tree changed since graph was indexed'),
-        changedFilesCount,
-        changedFilesSample,
+        ...(inventory.complete
+          ? {
+              changedFilesCount: inventory.files.length,
+              changedFilesSample: inventory.files.slice(0, 5).map((f) => f.path),
+            }
+          : {}),
         strategy: 'metadata',
       }
     }
@@ -826,13 +828,15 @@ function checkMetadataGitFreshness(
         }
       }
       const inventory = getChangedSourceInventory(projectRoot, metadata, graphJsonPath)
-      const changedFilesCount = inventory.complete ? inventory.files.length : undefined
-      const changedFilesSample = inventory.complete ? inventory.files.slice(0, 5).map(f => f.path) : undefined
       return {
         state: 'stale',
         reason: 'Working tree changed since graph was indexed (v2 legacy metadata)',
-        changedFilesCount,
-        changedFilesSample,
+        ...(inventory.complete
+          ? {
+              changedFilesCount: inventory.files.length,
+              changedFilesSample: inventory.files.slice(0, 5).map((f) => f.path),
+            }
+          : {}),
         strategy: 'metadata',
       }
     }

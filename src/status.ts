@@ -158,7 +158,7 @@ export async function collectGraphifyStatus(
       state: mcpState,
       reconnectAttempts: client.getReconnectAttempts(),
       maxReconnectAttempts: client.getMaxReconnectAttempts(),
-      recentStderr: recentStderr || undefined,
+      ...(recentStderr ? { recentStderr } : {}),
     },
   }
 }

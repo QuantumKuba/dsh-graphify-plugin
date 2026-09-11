@@ -78,12 +78,13 @@ export function resolveGraphifyRuntime(
     if (graphPath) {
       args.push(graphPath)
     }
+    const detectedMcpVersion = getDetectedGraphifyVersion()
     return {
       available: true,
       command: installedMcp,
       args,
       source: 'installed',
-      version: getDetectedGraphifyVersion(),
+      ...(detectedMcpVersion ? { version: detectedMcpVersion } : {}),
     }
   }
 
@@ -93,12 +94,13 @@ export function resolveGraphifyRuntime(
     if (graphPath) {
       args.push(graphPath)
     }
+    const detectedPyVersion = getDetectedGraphifyVersion()
     return {
       available: true,
       command: installedPython,
       args,
       source: 'python',
-      version: getDetectedGraphifyVersion(),
+      ...(detectedPyVersion ? { version: detectedPyVersion } : {}),
     }
   }
 
@@ -241,7 +243,7 @@ export function getRuntimeInfo(config: Config): {
     return {
       command: resolution.command,
       source: resolution.source,
-      version: resolution.version,
+      ...(resolution.version ? { version: resolution.version } : {}),
     }
   }
 

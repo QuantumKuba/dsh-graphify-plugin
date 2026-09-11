@@ -504,7 +504,7 @@ export class GraphifyMcpClient {
       return {
         ...response,
         content: response.content as McpCallResult['content'],
-        isError: response.isError ? true : undefined,
+        ...(response.isError ? { isError: true } : {}),
       }
     } catch (err) {
       if (signal?.aborted) {
