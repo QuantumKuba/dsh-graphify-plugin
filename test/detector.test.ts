@@ -67,4 +67,113 @@ describe('detector & config', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('resolves project root correctly when relative custom graph escapes searchDir to parent canonical graphify-out', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-escape-root-'))
+    const srcDir = path.join(tempRepo, 'src')
+    const graphDir = path.join(tempRepo, 'graphify-out')
+    fs.mkdirSync(srcDir, { recursive: true })
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    try {
+      // searchDir is /tempRepo/src, relative graphPath is ../graphify-out/graph.json
+      const detected = detectGraph(srcDir, '../graphify-out/graph.json')
+      assert.ok(detected)
+      assert.equal(detected.projectRoot, tempRepo, 'Should resolve /tempRepo, not /tempRepo/src')
+      assert.equal(detected.graphJsonPath, graphJson)
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves project root correctly for relative custom graph inside searchDir', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-inside-root-'))
+    const subDir = path.join(tempRepo, 'sub')
+    fs.mkdirSync(subDir, { recursive: true })
+    const graphJson = path.join(subDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    try {
+      const detected = detectGraph(tempRepo, 'sub/graph.json')
+      assert.ok(detected)
+      assert.equal(detected.projectRoot, tempRepo)
+      assert.equal(detected.graphJsonPath, graphJson)
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves project root for absolute graph inside searchDir and absolute graph outside searchDir', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-abs-root-'))
+    const srcDir = path.join(tempRepo, 'src')
+    const graphDir = path.join(tempRepo, 'graphify-out')
+    fs.mkdirSync(srcDir, { recursive: true })
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    try {
+      // 1. Absolute graph inside tempRepo when searchDir is tempRepo
+      const inside = detectGraph(tempRepo, graphJson)
+      assert.ok(inside)
+      assert.equal(inside.projectRoot, tempRepo)
+
+      // 2. Absolute graph outside searchDir when searchDir is srcDir
+      const outside = detectGraph(srcDir, graphJson)
+      assert.ok(outside)
+      assert.equal(outside.projectRoot, tempRepo, 'Canonical graphify-out inference resolves parent tempRepo')
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true })
+    }
+  })
+
+  it('prioritizes valid .graphify_root marker over canonical inference and falls back when marker is invalid', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-marker-prec-'))
+    const intendedTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-marker-intended-'))
+    const graphDir = path.join(tempRepo, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    // Valid marker pointing to intendedTarget
+    const markerPath = path.join(graphDir, '.graphify_root')
+    fs.writeFileSync(markerPath, intendedTarget)
+
+    try {
+      const detected = detectGraph(tempRepo)
+      assert.ok(detected)
+      assert.equal(detected.projectRoot, intendedTarget, 'Valid .graphify_root marker must win')
+
+      // Invalid marker pointing to non-existent directory -> falls back to canonical inference
+      fs.writeFileSync(markerPath, '/non/existent/directory/path/12345')
+      const fallbackDetected = detectGraph(tempRepo)
+      assert.ok(fallbackDetected)
+      assert.equal(fallbackDetected.projectRoot, tempRepo, 'Must fall back to canonical tempRepo when marker path does not exist')
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true })
+      fs.rmSync(intendedTarget, { recursive: true, force: true })
+    }
+  })
+
+  it('resolves project root correctly when custom graph is inside a nested subproject canonical graphify-out', () => {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-nested-sub-'))
+    const subprojectDir = path.join(tempRepo, 'subproject')
+    const graphDir = path.join(subprojectDir, 'graphify-out')
+    fs.mkdirSync(graphDir, { recursive: true })
+    const graphJson = path.join(graphDir, 'graph.json')
+    fs.writeFileSync(graphJson, '{}')
+
+    try {
+      // searchDir is /tempRepo, customGraphPath is 'subproject/graphify-out/graph.json'
+      // Basename of graphDir is 'graphify-out', so canonical layout inference must yield /tempRepo/subproject
+      const detected = detectGraph(tempRepo, 'subproject/graphify-out/graph.json')
+      assert.ok(detected)
+      assert.equal(detected.projectRoot, subprojectDir, 'Must resolve /tempRepo/subproject, not /tempRepo')
+      assert.equal(detected.graphJsonPath, graphJson)
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true })
+    }
+  })
 })

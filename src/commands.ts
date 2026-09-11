@@ -1,8 +1,22 @@
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
-import { resolveGraphifyCliCommand } from './server-process.ts'
+import {
+  resolveGraphifyCliCommand,
+  resolveGraphifyCliRuntime,
+  terminateChildProcess,
+  DEFAULT_GRAPHIFY_VERSION,
+} from './server-process.ts'
+import {
+  INDEX_METADATA_FILENAME,
+  readGraphifyIndexMetadata,
+  writeGraphifyIndexMetadata,
+  performPostUpdateValidation,
+  getChangedSourceInventory,
+  isSafeChange,
+} from './freshness.ts'
 
 export interface CommandInvocation {
   commandId?: unknown
@@ -125,9 +139,135 @@ export function registerGraphifyCommand(
       try {
         const projectRoot = invocation.agent.session.header.cwd || defaultProjectRoot
         const request = parseGraphifyCommand(invocation.rawInput, projectRoot)
-        const { command, args } = resolveGraphifyCliCommand(config, request)
+        const cliResolution = resolveGraphifyCliRuntime(config, request)
+        if (!cliResolution.available) {
+          return {
+            kind: 'error',
+            text: `Graphify is not installed.\n\nInstall it with:\n  uv tool install 'graphifyy[mcp]==${DEFAULT_GRAPHIFY_VERSION}'\n\nor configure \`cliCommand\` in cordis.yml.`,
+          }
+        }
+        const { command, args } = cliResolution
+        const canonicalGraphJson = path.join(request.projectRoot, 'graphify-out', 'graph.json')
+
+        if (request.operation === 'build') {
+          const isCodeOnly = request.flags.includes('--code-only')
+          const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
+
+          if (isCodeOnly) {
+            // --code-only builds skip semantic/document sources; do not establish full-corpus baseline.
+            // Best-effort unlink preexisting index metadata so old baseline is not falsely assumed for new graph.
+            try {
+              const metaPath = path.join(path.dirname(canonicalGraphJson), INDEX_METADATA_FILENAME)
+              if (fs.existsSync(metaPath)) {
+                fs.unlinkSync(metaPath)
+              }
+            } catch {
+              // Ignore unlink error
+            }
+            return {
+              kind: 'success',
+              text: `${text}\n\nNote: Graphify code-only build completed. Because --code-only skips semantic/document sources, this build does not establish a full-corpus freshness baseline.`,
+            }
+          }
+
+          if (performPostUpdateValidation(request.projectRoot, canonicalGraphJson)) {
+            let meta = null
+            try {
+              meta = writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+            } catch {
+              // Metadata recording failure ignored
+            }
+            if (meta?.git?.baselineComplete === true) {
+              return { kind: 'success', text }
+            } else {
+              return {
+                kind: 'success',
+                text: `${text}\n\nWarning: Graphify build completed, but dsh-graphify could not capture a complete source-state baseline. Freshness remains unverified.`,
+              }
+            }
+          } else {
+            return {
+              kind: 'success',
+              text: `${text}\n\nWarning: Post-build validation failed for graph.json. Freshness metadata was not recorded.`,
+            }
+          }
+        }
+
+        // Incremental update (/graphify update)
+        const priorMeta = readGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+        let eligibleForCheckpoint = false
+        let checkpointBlockReason = ''
+
+        const isTrustworthyV3 =
+          priorMeta !== null &&
+          priorMeta.version === 3 &&
+          priorMeta.git !== undefined &&
+          priorMeta.git.baselineComplete === true &&
+          priorMeta.git.indexedPaths !== undefined
+
+        if (!isTrustworthyV3) {
+          eligibleForCheckpoint = false
+          checkpointBlockReason =
+            'Freshness metadata predates source-state tracking or has incomplete baseline. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to establish a trustworthy freshness baseline.'
+        } else {
+          const inventory = getChangedSourceInventory(request.projectRoot, priorMeta, canonicalGraphJson)
+          if (!inventory.complete) {
+            eligibleForCheckpoint = false
+            checkpointBlockReason =
+              inventory.reason ||
+              'Source state relative to indexed graph baseline could not be safely verified. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to make the graph fully current.'
+          } else {
+            const unsupportedSources = inventory.files.filter((f) => !isSafeChange(f))
+            if (unsupportedSources.length > 0) {
+              eligibleForCheckpoint = false
+              checkpointBlockReason =
+                'Semantic or unsupported source changes were detected. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to make the graph fully current.'
+            } else {
+              eligibleForCheckpoint = true
+            }
+          }
+        }
+
         const text = await runGraphify(command, args, request.projectRoot, invocation.signal)
-        return { kind: 'success', text }
+
+        if (eligibleForCheckpoint) {
+          if (performPostUpdateValidation(request.projectRoot, canonicalGraphJson)) {
+            // Re-verify that no unsupported sources were introduced concurrently during the update
+            const postInventory = getChangedSourceInventory(request.projectRoot, priorMeta, canonicalGraphJson)
+            const postUnsupported = postInventory.complete ? postInventory.files.filter((f) => !isSafeChange(f)) : []
+            if (postInventory.complete && postUnsupported.length === 0) {
+              let updatedMeta = null
+              try {
+                updatedMeta = writeGraphifyIndexMetadata(request.projectRoot, canonicalGraphJson)
+              } catch {
+                // Ignore metadata recording failure
+              }
+              if (updatedMeta?.git?.baselineComplete === true) {
+                return { kind: 'success', text }
+              } else {
+                return {
+                  kind: 'success',
+                  text: `${text}\n\nWarning: Graphify incremental update completed, but dsh-graphify could not capture a complete source-state baseline. Freshness remains unverified.`,
+                }
+              }
+            } else {
+              return {
+                kind: 'success',
+                text: `${text}\n\nNote: Graphify incremental update completed, but source state changed during update. Freshness checkpoint was not advanced. Run a full Graphify build (/graphify build) to make the graph fully current.`,
+              }
+            }
+          } else {
+            return {
+              kind: 'success',
+              text: `${text}\n\nWarning: Post-update validation failed for graph.json. Freshness metadata was not recorded.`,
+            }
+          }
+        } else {
+          return {
+            kind: 'success',
+            text: `${text}\n\nNote: Graphify incremental update completed, but ${checkpointBlockReason}`,
+          }
+        }
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error)
         return { kind: 'error', text: `Graphify failed: ${text}` }
@@ -146,8 +286,9 @@ function runGraphify(command: string, args: readonly string[], cwd: string, sign
     let stderr = ''
     let settled = false
     const onAbort = () => {
-      child.kill('SIGTERM')
-      settle(() => reject(new Error('Graphify command cancelled')))
+      terminateChildProcess(child).finally(() => {
+        settle(() => reject(new Error('Graphify command cancelled')))
+      })
     }
     const settle = (action: () => void) => {
       if (settled) return
@@ -169,6 +310,10 @@ function runGraphify(command: string, args: readonly string[], cwd: string, sign
     signal.addEventListener('abort', onAbort, { once: true })
     child.once('error', (error) => settle(() => reject(error)))
     child.once('close', (code, childSignal) => {
+      if (signal.aborted) {
+        settle(() => reject(new Error('Graphify command cancelled')))
+        return
+      }
       if (code === 0) {
         settle(() => resolve(stdout || 'Graphify completed successfully.'))
         return

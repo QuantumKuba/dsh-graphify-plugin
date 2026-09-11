@@ -67,8 +67,8 @@ describe('Graphify Plugin Integration', () => {
       assert.ok(promptText.includes('Graphify Knowledge Graph'))
       assert.ok(promptText.includes('query_graph'))
 
-      // 2. Verify native tools plus forward-compatible capability accessors
-      assert.equal(registeredTools.size, 13)
+      // 2. Verify native tools plus forward-compatible capability accessors and doctor status tool
+      assert.equal(registeredTools.size, 15)
       const expectedTools = [
         'query_graph',
         'get_node',
@@ -80,9 +80,11 @@ describe('Graphify Plugin Integration', () => {
         'list_prs',
         'get_pr_impact',
         'triage_prs',
+        'graphify_status',
         'graphify_capabilities',
         'graphify_call',
         'graphify_resource',
+        'graphify_project_resource',
       ]
       for (const name of expectedTools) {
         assert.ok(registeredTools.has(name), `Missing tool: ${name}`)
@@ -167,6 +169,16 @@ describe('Graphify Plugin Integration', () => {
       )) as { text: string; isError?: boolean }
       assert.equal(commResult.isError, false)
       assert.ok(commResult.text.length > 0)
+
+      // 10b. Test executing graphify_status tool
+      const statusTool = registeredTools.get('graphify_status')!
+      const statusExecResult = (await statusTool.execute({}, { signal: new AbortController().signal })) as {
+        text: string
+        isError?: boolean
+      }
+      assert.equal(statusExecResult.isError, false)
+      assert.ok(statusExecResult.text.includes('Graphify Status:'))
+      assert.ok(statusExecResult.text.includes('Knowledge Graph:'))
 
       // 11. Future Graphify capabilities and resources remain reachable.
       const capabilities = registeredTools.get('graphify_capabilities')!

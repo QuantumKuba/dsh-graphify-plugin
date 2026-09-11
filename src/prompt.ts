@@ -1,40 +1,76 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { PromptSection, DetectedGraph } from './types.ts'
+import type { PromptSection, DetectedGraph, ResolvedProject } from './types.ts'
+import type { Config } from './config.ts'
+import { getPrefixedToolName } from './tools.ts'
+import { ProjectResolver } from './project-resolver.ts'
 
 /**
- * Creates the Graphify system prompt guidance section.
+ * Creates the Graphify decision policy prompt section for coding agents.
+ *
+ * Formulates a clear decision workflow (when to query, when to read source, when to stop),
+ * dynamically honoring configured tool prefixes, compact/full tool modes, and project status.
  */
-export function createGraphifyPromptSection(detectedGraph: DetectedGraph | null): PromptSection {
+export function createGraphifyPromptSection(
+  _detectedGraph?: DetectedGraph | ResolvedProject | null,
+  config?: Config,
+  _resolver?: ProjectResolver
+): PromptSection {
+  const prefix = config?.toolPrefix || ''
+  const isCompact = config?.toolMode === 'compact'
+
+  const queryTool = getPrefixedToolName('query_graph', prefix)
+  const nodeTool = getPrefixedToolName('get_node', prefix)
+  const neighborsTool = getPrefixedToolName('get_neighbors', prefix)
+  const pathTool = getPrefixedToolName('shortest_path', prefix)
+  const statusTool = getPrefixedToolName('graphify_status', prefix)
+  const projectResourceTool = getPrefixedToolName('graphify_project_resource', prefix)
+
   return {
     name: 'graphify:guidance',
     order: 250,
     text: () => {
-      let base = `## Graphify Knowledge Graph
+      const lines: string[] = [
+        '## Graphify Knowledge Graph & Decision Policy',
+        '',
+        'This workspace provides access to a local Graphify knowledge graph for structural navigation, dependency analysis, and architecture exploration.',
+        '',
+        '### Decision Policy: When to use Graphify',
+        `- High-level architecture or concept discovery: use \`${queryTool}\` (BFS for broad context, DFS for deep traces).`,
+        `- Exact symbol or interface details: use \`${nodeTool}\` with symbol label or ID.`,
+        `- Direct callers, callees, or dependencies: use \`${neighborsTool}\`.`,
+        `- Relationship or call path between two modules: use \`${pathTool}\`.`,
+        `- Graph usability, freshness, or git sync status: use \`${statusTool}\`.`,
+      ]
 
-This workspace has access to a Graphify knowledge graph with god nodes, community structures, and cross-file relationships.
-
-When navigating, understanding architecture, or planning changes:
-- Use \`query_graph\` to perform BFS/DFS traversals for natural language questions and concept exploration.
-- Use \`god_nodes\` to discover central architectural abstractions and high-degree hub nodes (optionally filtering extreme hubs with \`exclude_hubs_percentile\`).
-- Use \`shortest_path\` to trace direct dependency and call relationships between two symbols or files.
-- Use \`get_neighbors\` and \`get_node\` for detailed inspection of specific nodes and their connections.
-- Use \`get_community\` to inspect module members and architectural cluster boundaries.
-- Use \`list_prs\`, \`get_pr_impact\`, and \`triage_prs\` when reviewing GitHub pull requests and assessing blast radius.
-- Use \`graphify_resource\` for the report, stats, god-nodes, surprises, confidence audit, and suggested questions resources (\`graphify://report\`, \`graphify://stats\`, \`graphify://god-nodes\`, \`graphify://surprises\`, \`graphify://audit\`, \`graphify://questions\`).
-- Use \`graphify_capabilities\` before \`graphify_call\` when a newer Graphify version exposes a tool without a dedicated DSH definition.
-
-Rules:
-- Query the graph before performing large unindexed codebase sweeps when investigating architecture.
-- If \`project_path\` is omitted, the graph tools resolve against the calling session’s project directory.`
-
-      if (detectedGraph?.reportPath) {
-        base += `\n- A detailed report is available at \`${detectedGraph.reportPath}\`.`
+      if (!isCompact) {
+        const godTool = getPrefixedToolName('god_nodes', prefix)
+        const commTool = getPrefixedToolName('get_community', prefix)
+        const prImpactTool = getPrefixedToolName('get_pr_impact', prefix)
+        lines.push(
+          `- Core abstractions and high-degree hub nodes: use \`${godTool}\`.`,
+          `- Cluster and module boundaries: use \`${commTool}\`.`,
+          `- Pull request review & blast radius: use \`${prImpactTool}\` or \`${getPrefixedToolName('list_prs', prefix)}\`.`
+        )
       }
-      if (detectedGraph?.wikiIndexPath) {
-        base += `\n- Structured wiki index is available at \`${detectedGraph.wikiIndexPath}\`.`
-      }
 
-      return base
+      lines.push(
+        `- Pre-generated reports and audits: use \`${projectResourceTool}\` (e.g. \`resource: 'report'\` or \`resource: 'wiki'\`).`,
+        '',
+        '### Authoritative Source Principle',
+        '1. **Navigation first, source files authoritative**: Use Graphify to pinpoint relevant directories and files, then read the actual source files for implementation details.',
+        '2. **Never edit blind**: Do NOT modify code based solely on graph descriptions without reading the real source file.',
+        '3. **Stop querying early**: Once you locate the relevant code or have enough evidence, proceed directly with file inspection or edits. Avoid redundant graph queries.',
+        '4. **Trivial tasks**: For simple single-file edits or obvious locations, use direct filesystem tools rather than Graphify.'
+      )
+
+      lines.push(
+        '',
+        '### Session Reports & Diagnostics',
+        `- Use \`${statusTool}\` to inspect graph status, report locations, and freshness for the active workspace.`,
+        `- When available in the workspace, refer to \`graphify-out/GRAPH_REPORT.md\` and \`graphify-out/wiki/index.md\` for structural overviews.`
+      )
+
+      return lines.join('\n')
     },
   }
 }
@@ -44,12 +80,14 @@ Rules:
  */
 export function registerGraphifyPrompt(
   ctx: Context,
-  detectedGraph: DetectedGraph | null
+  detectedGraph?: DetectedGraph | ResolvedProject | null,
+  config?: Config,
+  resolver?: ProjectResolver
 ): () => void {
   if (!ctx.systemPrompt || typeof ctx.systemPrompt.section !== 'function') {
     return () => {}
   }
 
-  const section = createGraphifyPromptSection(detectedGraph)
+  const section = createGraphifyPromptSection(detectedGraph, config, resolver)
   return ctx.systemPrompt.section(section)
 }

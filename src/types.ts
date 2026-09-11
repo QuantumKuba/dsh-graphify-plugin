@@ -1,6 +1,7 @@
 /**
  * Type definitions for DeepSeek Harness Graphify Plugin.
  */
+import type {} from '@deepseek-ai/cordis'
 
 /** Content block structure for DSH model responses and results. */
 export interface ContentBlock {
@@ -110,32 +111,6 @@ export interface McpResource {
   mimeType?: string
 }
 
-/** MCP JSON-RPC 2.0 Request. */
-export interface JsonRpcRequest {
-  jsonrpc: '2.0'
-  id: number | string
-  method: string
-  params?: Record<string, unknown>
-}
-
-/** MCP JSON-RPC 2.0 Response. */
-export interface JsonRpcResponse {
-  jsonrpc: '2.0'
-  id: number | string
-  result?: unknown
-  error?: {
-    code: number
-    message: string
-    data?: unknown
-  }
-}
-
-/** MCP JSON-RPC 2.0 Notification. */
-export interface JsonRpcNotification {
-  jsonrpc: '2.0'
-  method: string
-  params?: Record<string, unknown>
-}
 
 /** Result returned by an MCP tools/call request. */
 export interface McpCallResult {
@@ -158,6 +133,98 @@ export interface McpResourceResult {
     text?: string
     blob?: string
   }>
+}
+
+/** Automatic reconnect policy for Graphify MCP connection. */
+export interface ReconnectConfig {
+  /** Reconnect automatically after a lost connection (default true). */
+  enabled?: boolean
+  /** First reconnect delay in milliseconds (default 500). */
+  initialDelayMs?: number
+  /** Backoff ceiling in milliseconds (default 30000). */
+  maxDelayMs?: number
+  /** Consecutive failed attempts before giving up (default 10). */
+  maxAttempts?: number
+}
+
+/** Resolved project identity and graph paths for a DSH session. */
+export interface ResolvedProject {
+  /** Canonical project root directory. */
+  readonly projectRoot: string
+  /** Absolute path to graph.json or null if missing. */
+  readonly graphJsonPath: string | null
+  /** Absolute path to graphify-out directory. */
+  readonly graphDir: string
+  /** Absolute path to GRAPH_REPORT.md if present. */
+  readonly reportPath?: string
+  /** Absolute path to graphify-out/wiki/index.md if present. */
+  readonly wikiIndexPath?: string
+  /** Whether graph.json exists and is readable. */
+  readonly hasGraph: boolean
+  /** Last modification timestamp of graph.json in milliseconds if present. */
+  readonly mtimeMs?: number
+}
+
+/** Mode governing tool surface exposure. */
+export type ToolMode = 'compact' | 'full'
+
+/** Mode governing graph freshness detection and remediation. */
+export type FreshnessMode = 'off' | 'warn' | 'auto'
+
+/** Freshness evaluation state. */
+export type FreshnessState = 'fresh' | 'stale' | 'unknown'
+
+/** Detailed graph freshness information. */
+export interface GraphFreshnessInfo {
+  readonly state: FreshnessState
+  readonly reason?: string
+  readonly changedFilesCount?: number
+  readonly changedFilesSample?: string[]
+  readonly lastIndexedTime?: string
+  readonly strategy?: 'metadata' | 'git-heuristic' | 'filesystem-heuristic'
+  readonly metadataVersion?: number
+  readonly baselineAvailable?: boolean
+  readonly isCanonicalTarget?: boolean
+  readonly autoUpdateEligible?: boolean
+  readonly autoUpdateBlockReason?: string
+}
+
+/** Overall operational status of Graphify for a project/session. */
+export type GraphifyOverallStatus = 'healthy' | 'stale' | 'missing' | 'unavailable' | 'error' | 'unprobed' | 'unknown'
+
+/** MCP connection states. */
+export type McpConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'disposed'
+
+/** Structured result returned by the `graphify_status` doctor tool. */
+export interface GraphifyStatusResult {
+  readonly overall: GraphifyOverallStatus
+  readonly projectRoot: string
+  readonly graphPath: string | null
+  readonly graphExists: boolean
+  readonly nodeCount: number | null
+  readonly edgeCount: number | null
+  readonly communityCount: number | null
+  readonly lastModified: string | null
+  readonly git: {
+    readonly head: string | null
+    readonly isDirty: boolean | null
+    readonly branch?: string | null
+  } | null
+  readonly freshness: GraphFreshnessInfo
+  readonly runtime: {
+    readonly command: string
+    readonly version?: string
+    readonly source: 'installed' | 'python' | 'uv' | 'custom' | 'unknown'
+  }
+  readonly mcp: {
+    readonly state: McpConnectionState
+    /** Current consecutive reconnect attempt number (0 when not reconnecting). */
+    readonly reconnectAttempts?: number
+    /** Maximum reconnect attempts configured. */
+    readonly maxReconnectAttempts?: number
+    readonly recentStderr?: string
+    readonly error?: string
+  }
 }
 
 declare module '@deepseek-ai/cordis' {
