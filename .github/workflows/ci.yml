@@ -55,3 +55,6 @@ jobs:
 
       - name: Run schema drift check
         run: pnpm run test:drift
+
+      - name: Verify package artifact
+        run: pnpm pack --dry-run

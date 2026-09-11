@@ -1,7 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config, validateConfig } from './config.ts'
 import { detectGraph } from './detector.ts'
-import { resolveGraphifyCommand, resolveGraphifyCliCommand, getRuntimeInfo } from './server-process.ts'
+import {
+  resolveGraphifyCommand,
+  resolveGraphifyCliCommand,
+  resolveGraphifyRuntime,
+  resolveGraphifyCliRuntime,
+  getRuntimeInfo,
+  DEFAULT_GRAPHIFY_VERSION,
+} from './server-process.ts'
 import { GraphifyMcpClient } from './client.ts'
 import { registerGraphifyTools, createGraphifyToolDefinitions, getPrefixedToolName } from './tools.ts'
 import { registerGraphifyPrompt, createGraphifyPromptSection } from './prompt.ts'
@@ -17,10 +24,23 @@ export { Config, validateConfig } from './config.ts'
 export * from './types.ts'
 export { detectGraph } from './detector.ts'
 export { GraphifyMcpClient } from './client.ts'
-export { createGraphifyToolDefinitions, registerGraphifyTools, getPrefixedToolName } from './tools.ts'
+export {
+  createGraphifyToolDefinitions,
+  registerGraphifyTools,
+  getPrefixedToolName,
+  isPathContained,
+  validateProjectPathAccess,
+} from './tools.ts'
 export { createGraphifyPromptSection, registerGraphifyPrompt } from './prompt.ts'
 export { registerGraphifyCommand } from './commands.ts'
-export { resolveGraphifyCommand, resolveGraphifyCliCommand, getRuntimeInfo } from './server-process.ts'
+export {
+  resolveGraphifyCommand,
+  resolveGraphifyCliCommand,
+  resolveGraphifyRuntime,
+  resolveGraphifyCliRuntime,
+  getRuntimeInfo,
+  DEFAULT_GRAPHIFY_VERSION,
+} from './server-process.ts'
 export { ProjectResolver } from './project-resolver.ts'
 export {
   checkGraphFreshness,
@@ -48,11 +68,8 @@ export function apply(ctx: Context, config?: Config): void {
   const initialProject = resolver.resolve()
   const workingDir = initialProject.projectRoot
 
-  const { command, args } = resolveGraphifyCommand(cfg, initialProject.graphJsonPath || undefined)
-
   const client = new GraphifyMcpClient({
-    command,
-    args,
+    resolveRuntime: () => resolveGraphifyRuntime(cfg, initialProject.graphJsonPath || undefined),
     cwd: workingDir,
     timeoutMs: cfg.timeoutMs,
     reconnect: cfg.reconnect,

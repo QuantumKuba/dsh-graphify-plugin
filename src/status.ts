@@ -8,7 +8,8 @@ import type {
 } from './types.ts'
 import type { GraphifyMcpClient } from './client.ts'
 import { checkGraphFreshness } from './freshness.ts'
-import { getRuntimeInfo } from './server-process.ts'
+import { getRuntimeInfo, DEFAULT_GRAPHIFY_VERSION } from './server-process.ts'
+import { getPackageVersion } from './version.ts'
 
 export interface CollectStatusOptions {
   /** If true, proactively probes the MCP connection if disconnected (default false). */
@@ -123,6 +124,10 @@ export async function collectGraphifyStatus(
 
   if (mcpState === 'error') {
     overall = 'error'
+  } else if (runtime.source === 'unknown') {
+    overall = 'unavailable'
+  } else if (mcpState === 'connecting' || mcpState === 'reconnecting') {
+    overall = 'unavailable'
   } else if (!project.hasGraph) {
     overall = 'missing'
   } else if (mcpState === 'connected') {
@@ -134,9 +139,7 @@ export async function collectGraphifyStatus(
       overall = 'unknown'
     }
   } else if (mcpState === 'disconnected') {
-    overall = runtime.source === 'unknown' ? 'unavailable' : 'unprobed'
-  } else if (mcpState === 'connecting' || mcpState === 'reconnecting') {
-    overall = 'unavailable'
+    overall = 'unprobed'
   }
 
   return {
@@ -167,6 +170,7 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
   const badge = status.overall.toUpperCase()
   const lines: string[] = [`Graphify Status: ${badge}`]
 
+  lines.push(`• Plugin: dsh-graphify v${getPackageVersion()}`)
   lines.push(`• Project Root: ${status.projectRoot}`)
 
   if (status.graphExists && status.graphPath) {
@@ -213,7 +217,8 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
     lines.push(`• Git Repository: commit ${status.git.head}${branch}, ${dirty}`)
   }
 
-  lines.push(`• Runtime: ${status.runtime.command} [${status.runtime.source}]`)
+  const runtimeVer = status.runtime.version ? ` (v${status.runtime.version})` : ''
+  lines.push(`• Runtime: ${status.runtime.command} [${status.runtime.source}]${runtimeVer}`)
   const reconnectInfo = status.mcp.state === 'reconnecting'
     ? ` (attempt ${status.mcp.reconnectAttempts}/${status.mcp.maxReconnectAttempts})`
     : ''
@@ -248,7 +253,7 @@ export function formatGraphifyStatus(status: GraphifyStatusResult): string {
     if (status.mcp.state === 'reconnecting') {
       lines.push('Recommendation: MCP connection is recovering. Graphify will be available when reconnection succeeds.')
     } else {
-      lines.push('Recommendation: Graphify runtime is unavailable. Verify installation with `uv tool install "graphifyy[mcp]"` or configure `command` in cordis.yml.')
+      lines.push(`Recommendation: Graphify runtime is unavailable. Verify installation with \`uv tool install 'graphifyy[mcp]==${DEFAULT_GRAPHIFY_VERSION}'\` or configure \`command\` in cordis.yml.`)
     }
   } else {
     lines.push('Recommendation: Graph state is unknown. Inspect graphify-out/ and run `/graphify build` if needed.')

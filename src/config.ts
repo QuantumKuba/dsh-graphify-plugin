@@ -101,6 +101,12 @@ export interface Config {
    * Defaults to the active project root or process.cwd().
    */
   cwd?: string
+
+  /**
+   * Allow model-invoked Graphify tools to operate on projects outside the active DSH session workspace.
+   * Defaults to false for security in marketplace deployments.
+   */
+  allowExternalProjects: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -126,6 +132,7 @@ export const Config: Schema<Config> = Schema.object({
     maxAttempts: Schema.number().default(10).description('Maximum consecutive reconnect attempts'),
   }).default({ enabled: true, initialDelayMs: 500, maxDelayMs: 30000, maxAttempts: 10 }).description('Connection resilience options'),
   cwd: Schema.string().description('Explicit working directory for Graphify subprocess'),
+  allowExternalProjects: Schema.boolean().default(false).description('Allow model-invoked Graphify tools to operate on projects outside the active DSH session workspace'),
 })
 
 /**
@@ -133,6 +140,10 @@ export const Config: Schema<Config> = Schema.object({
  * any parameters are invalid or out of bounds.
  */
 export function validateConfig(config: Config): void {
+  if (config.allowExternalProjects !== undefined && typeof config.allowExternalProjects !== 'boolean') {
+    throw new Error(`Invalid dsh-graphify configuration: allowExternalProjects must be a boolean, got ${config.allowExternalProjects}.`)
+  }
+
   if (typeof config.timeoutMs !== 'number' || config.timeoutMs <= 0 || !Number.isFinite(config.timeoutMs)) {
     throw new Error(`Invalid dsh-graphify configuration: timeoutMs must be a positive number, got ${config.timeoutMs}.`)
   }

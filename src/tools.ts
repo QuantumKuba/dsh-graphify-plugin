@@ -68,6 +68,52 @@ export function getPrefixedToolName(baseName: string, prefix: string): string {
   return `${prefix}${baseName}`
 }
 
+export function isPathContained(parentDir: string, childPath: string): boolean {
+  try {
+    const realParent = fs.realpathSync(path.resolve(parentDir))
+    const realChild = fs.existsSync(childPath)
+      ? fs.realpathSync(path.resolve(childPath))
+      : path.resolve(childPath)
+
+    const rel = path.relative(realParent, realChild)
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  } catch {
+    const resolvedParent = path.resolve(parentDir)
+    const resolvedChild = path.resolve(childPath)
+    const rel = path.relative(resolvedParent, resolvedChild)
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  }
+}
+
+/**
+ * Validates that model tool access to an explicit project path is allowed.
+ * When `allowExternalProjects` is false, restricts model access to the active session workspace.
+ */
+export function validateProjectPathAccess(
+  explicitPath: string | undefined,
+  execution: ToolRunContext | undefined,
+  config: Config
+): void {
+  if (!explicitPath || config.allowExternalProjects) {
+    return
+  }
+
+  const sessionWorkspace =
+    execution?.agent?.session.header.cwd ||
+    config.cwd ||
+    process.cwd()
+
+  if (!sessionWorkspace) {
+    return
+  }
+
+  if (!isPathContained(sessionWorkspace, explicitPath)) {
+    throw new Error(
+      `Access to external project path "${explicitPath}" is blocked. Model-controlled tool calls are restricted to the active session workspace ("${sessionWorkspace}"). Set \`allowExternalProjects: true\` in cordis.yml to allow model access outside the workspace.`
+    )
+  }
+}
+
 /**
  * Creates Graphify's native tools, doctor tool, plus capability and resource accessors.
  */
@@ -87,72 +133,77 @@ export function createGraphifyToolDefinitions(
     execution?: ToolRunContext,
     isQueryTool = false
   ): Promise<GraphifyToolOutput> {
-    const args = { ...rawArgs }
-    let project = resolver.resolve({
-      explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
-      toolContext: execution,
-    })
+    try {
+      const args = { ...rawArgs }
+      const explicitPath = typeof args.project_path === 'string' ? args.project_path.trim() : undefined
+      if (explicitPath) {
+        validateProjectPathAccess(explicitPath, execution, config)
+      }
 
-    if (!args.project_path) {
-      args.project_path = project.projectRoot
-    }
+      let project = resolver.resolve({
+        explicitPath,
+        toolContext: execution,
+      })
 
-    let stalenessNotice = ''
+      if (!args.project_path) {
+        args.project_path = project.projectRoot
+      }
 
-    // Handle freshness checks and auto-updates for query tools
-    if (isQueryTool && project.hasGraph) {
-      const freshnessMode = config.freshness?.mode ?? 'warn'
-      if (freshnessMode === 'warn') {
-        const freshness = checkGraphFreshness(project)
-        if (freshness.state === 'stale') {
-          stalenessNotice = `[Notice: Graph may be stale (${freshness.reason}). Real source files remain authoritative.]\n\n`
-        }
-      } else if (freshnessMode === 'auto') {
-        const freshness = checkGraphFreshness(project)
-        if (freshness.state === 'stale') {
-          const eligibility = evaluateAutoUpdateEligibility(project)
-          if (eligibility.kind === 'requires-full-refresh') {
-            stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
-          } else if (eligibility.kind === 'unsupported-target') {
-            stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
-          } else if (eligibility.kind === 'unknown') {
-            stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
-          } else if (eligibility.kind === 'eligible') {
-            const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal, project.graphJsonPath)
-            if (updateRes.success) {
-              if (project.graphJsonPath && performPostUpdateValidation(project.projectRoot, project.graphJsonPath)) {
-                // Re-verify that no unsupported sources were introduced concurrently during update
-                const postEligibility = evaluateAutoUpdateEligibility(project)
-                if (postEligibility.kind === 'eligible') {
-                  writeGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
-                  resolver.invalidate(project.projectRoot)
-                  // Re-resolve project and refresh metadata after update
-                  project = resolver.resolve({
-                    explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
-                    toolContext: execution,
-                  })
-                  if (!args.project_path) {
-                    args.project_path = project.projectRoot
-                  }
-                  const postFreshness = checkGraphFreshness(project)
-                  if (postFreshness.state === 'stale') {
-                    stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
+      let stalenessNotice = ''
+
+      // Handle freshness checks and auto-updates for query tools
+      if (isQueryTool && project.hasGraph) {
+        const freshnessMode = config.freshness?.mode ?? 'warn'
+        if (freshnessMode === 'warn') {
+          const freshness = checkGraphFreshness(project)
+          if (freshness.state === 'stale') {
+            stalenessNotice = `[Notice: Graph may be stale (${freshness.reason}). Real source files remain authoritative.]\n\n`
+          }
+        } else if (freshnessMode === 'auto') {
+          const freshness = checkGraphFreshness(project)
+          if (freshness.state === 'stale') {
+            const eligibility = evaluateAutoUpdateEligibility(project)
+            if (eligibility.kind === 'requires-full-refresh') {
+              stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
+            } else if (eligibility.kind === 'unsupported-target') {
+              stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
+            } else if (eligibility.kind === 'unknown') {
+              stalenessNotice = `[Notice: Graph is stale (${eligibility.reason}). Real source files remain authoritative.]\n\n`
+            } else if (eligibility.kind === 'eligible') {
+              const updateRes = await coalescer.update(config, project.projectRoot, execution?.signal, project.graphJsonPath)
+              if (updateRes.success) {
+                if (project.graphJsonPath && performPostUpdateValidation(project.projectRoot, project.graphJsonPath)) {
+                  // Re-verify that no unsupported sources were introduced concurrently during update
+                  const postEligibility = evaluateAutoUpdateEligibility(project)
+                  if (postEligibility.kind === 'eligible') {
+                    writeGraphifyIndexMetadata(project.projectRoot, project.graphJsonPath)
+                    resolver.invalidate(project.projectRoot)
+                    // Re-resolve project and refresh metadata after update
+                    project = resolver.resolve({
+                      explicitPath: typeof args.project_path === 'string' ? args.project_path : undefined,
+                      toolContext: execution,
+                    })
+                    if (!args.project_path) {
+                      args.project_path = project.projectRoot
+                    }
+                    const postFreshness = checkGraphFreshness(project)
+                    if (postFreshness.state === 'stale') {
+                      stalenessNotice = `[Notice: Graph remains stale after update (${postFreshness.reason}). Real source files remain authoritative.]\n\n`
+                    }
+                  } else {
+                    stalenessNotice = `[Notice: Non-code source changes detected during update. Graph remains stale. Real source files remain authoritative.]\n\n`
                   }
                 } else {
-                  stalenessNotice = `[Notice: Non-code source changes detected during update. Graph remains stale. Real source files remain authoritative.]\n\n`
+                  stalenessNotice = `[Notice: Post-update validation failed for graph.json. Graph may be incomplete or invalid.]\n\n`
                 }
               } else {
-                stalenessNotice = `[Notice: Post-update validation failed for graph.json. Graph may be incomplete or invalid.]\n\n`
+                stalenessNotice = `[Notice: Auto-update failed (${updateRes.error || updateRes.stderr.trim()}). Using current graph.]\n\n`
               }
-            } else {
-              stalenessNotice = `[Notice: Auto-update failed (${updateRes.error || updateRes.stderr.trim()}). Using current graph.]\n\n`
             }
           }
         }
       }
-    }
 
-    try {
       const result = await client.callTool(rawName, args, execution?.signal, config.timeoutMs)
       const rawText = result.content?.map((c) => c.text || '').join('\n') || ''
       const text = stalenessNotice ? `${stalenessNotice}${rawText}` : rawText
@@ -290,8 +341,25 @@ export function createGraphifyToolDefinitions(
       timeoutMs: config.timeoutMs,
       execute: async (_args, exec) => {
         const rawArgs = (_args as Record<string, unknown>) || {}
+        const explicitPath = typeof rawArgs.project_path === 'string' ? rawArgs.project_path.trim() : undefined
+        if (explicitPath) {
+          try {
+            validateProjectPathAccess(explicitPath, exec, config)
+          } catch (err) {
+            return {
+              text: `Error executing graphify_status: ${(err as Error).message}`,
+              overall: 'error',
+              projectRoot: explicitPath,
+              graphPath: undefined,
+              graphExists: false,
+              freshness: { state: 'unknown', reason: (err as Error).message },
+              mcpState: client.getConnectionState(),
+              isError: true,
+            }
+          }
+        }
         const project = resolver.resolve({
-          explicitPath: typeof rawArgs.project_path === 'string' ? rawArgs.project_path : undefined,
+          explicitPath,
           toolContext: exec,
         })
         const shouldProbe = rawArgs.probe !== false
@@ -461,14 +529,18 @@ export function createGraphifyToolDefinitions(
       timeoutMs: config.timeoutMs,
       execute: async (args, exec) => {
         const rawArgs = (args as { resource: string; project_path?: string })
-        const project = resolver.resolve({
-          explicitPath: rawArgs.project_path,
-          toolContext: exec,
-        })
-        if (!project.hasGraph) {
-          return { text: 'No knowledge graph found for this project. Run `/graphify` to generate one.', isError: true }
-        }
+        const explicitPath = typeof rawArgs.project_path === 'string' ? rawArgs.project_path.trim() : undefined
         try {
+          if (explicitPath) {
+            validateProjectPathAccess(explicitPath, exec, config)
+          }
+          const project = resolver.resolve({
+            explicitPath,
+            toolContext: exec,
+          })
+          if (!project.hasGraph) {
+            return { text: 'No knowledge graph found for this project. Run `/graphify` to generate one.', isError: true }
+          }
           let filePath: string | undefined
           let fallbackMessage = ''
           switch (rawArgs.resource) {

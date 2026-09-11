@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.2.0] - 2026-09-10
+## [0.2.0] - 2026-09-11
 
 ### Added
+- **Marketplace Resilience & Graceful Degraded Startup**:
+  - Decoupled plugin lifecycle mount from Graphify runtime availability via lazy `RuntimeResolution` discriminated union.
+  - DeepSeek Harness boots cleanly even if Graphify is absent and `uv` is absent—preventing broken DSH profiles on initial install.
+  - `graphify_status` reports `UNAVAILABLE` with actionable remediation and pinned installation commands.
+  - Tool and slash command invocations return structured, actionable error messages instead of unhandled rejections or crashes.
+  - Dynamic runtime rediscovery: once a user installs Graphify, the plugin discovers it on the next invocation without requiring a DSH host restart.
+- **Model-Controlled Project Path Security**:
+  - Added `allowExternalProjects` configuration (default: `false`) bounding model tool calls to the active session workspace.
+  - Implemented `fs.realpathSync` containment checks preventing symlink escapes and directory prefix collisions (`/repo` vs `/repo-evil`).
+  - Preserved human slash command path flexibility for intentional manual `/graphify` invocations.
+- **Reproducible Version Pinning**:
+  - Centralized `DEFAULT_GRAPHIFY_VERSION = '0.9.57'` as the tested default for automatic `uv` provisioning and diagnostic messages.
+- **Web Client Inject Audit & Dependency Hardening**:
+  - Added `@deepseek-ai/dsh-client-ui-primitives` to `dsh.client.inject` matching runtime browser imports.
+  - Bounded `@deepseek-ai/cordis` peer dependency to `>=4.0.0 <5` and removed unnecessary type-only runtime peer dependencies.
+- **Packed Clean-Machine Install Test**:
+  - Added `test/packed-install.test.ts` validating clean package installation from `pnpm pack` tarball in an isolated consumer project across all missing-runtime and multi-workspace scenarios.
 - **Official MCP SDK Integration**:
   - Replaced ad-hoc JSON-RPC transport with `@modelcontextprotocol/sdk` (`Client` and `StdioClientTransport`).
   - Added generation tracking to prevent race conditions and zombie subprocess leaks on reconnect.

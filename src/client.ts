@@ -10,6 +10,7 @@ import type {
   McpConnectionState,
 } from './types.ts'
 import { getPackageVersion } from './version.ts'
+import type { RuntimeResolution } from './server-process.ts'
 
 export interface ClientLogger {
   info: (msg: string, ...args: unknown[]) => void
@@ -19,13 +20,14 @@ export interface ClientLogger {
 }
 
 export interface ClientOptions {
-  command: string
-  args: string[]
+  command?: string
+  args?: string[]
   cwd: string
   env?: Record<string, string>
   timeoutMs?: number
   reconnect?: ReconnectConfig
   logger?: ClientLogger
+  resolveRuntime?: () => RuntimeResolution
 }
 
 export interface ServerExitInfo {
@@ -63,8 +65,9 @@ export class GraphifyMcpClient {
   private healthyTimer: NodeJS.Timeout | null = null
   private isDisposed = false
 
-  private readonly command: string
-  private readonly args: string[]
+  private readonly command?: string
+  private readonly args?: string[]
+  private readonly resolveRuntime?: () => RuntimeResolution
   private readonly cwd: string
   private readonly env: Record<string, string>
   private readonly defaultTimeoutMs: number
@@ -78,6 +81,7 @@ export class GraphifyMcpClient {
   constructor(options: ClientOptions) {
     this.command = options.command
     this.args = options.args
+    this.resolveRuntime = options.resolveRuntime
     this.cwd = options.cwd
     this.env = options.env ?? (process.env as Record<string, string>)
     this.defaultTimeoutMs = options.timeoutMs ?? 60000
@@ -155,7 +159,11 @@ export class GraphifyMcpClient {
       await this.initPromise
     } catch (err) {
       if (!this.isDisposed) {
-        this.setState('error')
+        if ((err as { isRuntimeUnavailable?: boolean })?.isRuntimeUnavailable) {
+          this.setState('disconnected')
+        } else {
+          this.setState('error')
+        }
       }
       throw err
     } finally {
@@ -203,11 +211,30 @@ export class GraphifyMcpClient {
       this.reconnectTimer = null
     }
 
+    let effectiveCommand = this.command
+    let effectiveArgs = this.args
+
+    if (this.resolveRuntime) {
+      const resolution = this.resolveRuntime()
+      if (!resolution.available) {
+        this.logger?.warn?.(`[dsh-graphify] Runtime resolution unavailable: ${resolution.reason}`)
+        const err = new Error(`Graphify is unavailable: ${resolution.reason}\n${resolution.remediation}`)
+        ;(err as unknown as { isRuntimeUnavailable?: boolean }).isRuntimeUnavailable = true
+        throw err
+      }
+      effectiveCommand = resolution.command
+      effectiveArgs = resolution.args
+    }
+
+    if (!effectiveCommand || !effectiveArgs) {
+      throw new Error('Graphify MCP client has no executable command configured or resolved.')
+    }
+
     const currentGeneration = ++this.generation
     if (this.state !== 'reconnecting') {
       this.setState('connecting')
     }
-    this.logger?.debug(`[dsh-graphify] Starting Graphify MCP server (gen ${currentGeneration}): ${this.command} ${this.args.join(' ')}`)
+    this.logger?.debug(`[dsh-graphify] Starting Graphify MCP server (gen ${currentGeneration}): ${effectiveCommand} ${effectiveArgs.join(' ')}`)
 
     // Clean up any stale transport
     if (this.transport) {
@@ -225,8 +252,8 @@ export class GraphifyMcpClient {
 
     try {
       transport = new StdioClientTransport({
-        command: this.command,
-        args: this.args,
+        command: effectiveCommand,
+        args: effectiveArgs,
         cwd: this.cwd,
         env: this.env,
         stderr: 'pipe',
@@ -344,7 +371,11 @@ export class GraphifyMcpClient {
     try {
       await this.establishConnection()
       // establishConnection succeeded — state is now 'connected'
-    } catch {
+    } catch (err) {
+      if ((err as { isRuntimeUnavailable?: boolean })?.isRuntimeUnavailable) {
+        this.setState('disconnected')
+        return
+      }
       // establishConnection failed — state is now 'error'
       // Schedule next retry if budget remains and we haven't been disposed/superseded
       if (this.isDisposed || this.generation !== triggerGeneration + 1) return

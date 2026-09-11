@@ -85,9 +85,22 @@ describe('Multi-Project Resource Isolation', () => {
       assert.match(statsB.text, /Nodes: 4/)
       assert.match(statsB.text, /Edges: 3/)
 
-      // 6. Explicit project_path overrides session cwd
-      const overrideResult = await resourceTool.execute({ resource: 'report', project_path: tempDirB }, execA)
-      assert.match(overrideResult.text, /Architecture Report for Project Beta/)
+      // 6. Explicit project_path outside session workspace is blocked by default (allowExternalProjects: false)
+      const blockedResult = await resourceTool.execute({ resource: 'report', project_path: tempDirB }, execA)
+      assert.equal(blockedResult.isError, true)
+      assert.match(blockedResult.text, /Access to external project path.*is blocked/i)
+
+      // 6b. With allowExternalProjects: true, external project_path is permitted
+      const externalConfig = Config({
+        command: process.execPath,
+        args: [serverPath],
+        toolMode: 'full',
+        allowExternalProjects: true,
+      })
+      const externalTools = createGraphifyToolDefinitions(client, externalConfig)
+      const externalResourceTool = externalTools.find((t) => t.name === 'graphify_project_resource')!
+      const overrideResult = await externalResourceTool.execute({ resource: 'report', project_path: tempDirB }, execA)
+      assert.match((overrideResult as { text: string }).text, /Architecture Report for Project Beta/)
 
       // 7. Unknown resource type returns error
       const unknownResult = await resourceTool.execute({ resource: 'unsupported_resource' }, execA)

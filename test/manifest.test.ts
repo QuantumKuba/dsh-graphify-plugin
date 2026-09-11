@@ -22,6 +22,7 @@ describe('DSH client manifest', () => {
     assert.deepEqual(manifest.dsh?.client?.inject, [
       '@deepseek-ai/dsh-client-locale',
       '@deepseek-ai/dsh-client-ui-conversation',
+      '@deepseek-ai/dsh-client-ui-primitives',
     ])
     const bundle = fs.readFileSync(path.join(repositoryRoot, 'lib/graphify-client.js'), 'utf8')
     assert.match(

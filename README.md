@@ -1,46 +1,79 @@
 # dsh-graphify
 
-`dsh-graphify` is the native [Graphify](https://github.com/Graphify-Labs/graphify) knowledge graph plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). It equips coding agents—especially local 20B–30B models—with structural code intelligence: architecture queries, dependency paths, community clustering, god node detection, and pull-request blast radius analysis.
+> **Architecture Overview**: `dsh-graphify` is the DeepSeek Harness plugin integration. [Graphify](https://github.com/Graphify-Labs/graphify) is the external local knowledge-graph runtime.
+>
+> Installing `dsh-graphify` equips coding agents—especially local 20B–30B models—with structural code intelligence: architecture queries, dependency paths, community clustering, god node detection, and pull-request blast radius analysis.
 
 Built on the official `@modelcontextprotocol/sdk` stdio transport, `dsh-graphify` integrates natively into Cordis lifecycle management, handles multi-workspace session project resolution, offers automatic graph freshness tracking, and provides a built-in diagnostic doctor tool (`graphify_status`).
 
 ---
 
-## Key Features
+## Supported Environments
 
-- **MCP Transport via `@modelcontextprotocol/sdk`**: Replaces ad-hoc JSON-RPC with the official SDK client and stdio transport. Features generation tracking against zombie processes, bounded exponential backoff reconnection, stderr ring-buffer captures (up to 50 chunks / 64 KiB), and cooperative `AbortSignal` cancellation.
-- **DeepSeek Harness & Cordis Native**: Built for DeepSeek Harness environments with declared peer dependency ranges (`dsh-session >=0.1.1-rc.2`, Cordis `>=4.0.0`). CI tests the supported baseline, while scheduled compatibility workflows test current upstream releases. Native lifecycle hooks (`ctx.effect()`), session-scoped context resolution, and durable Web UI companion cards.
-- **Optimized for 20B–30B Local LLMs**: Offers `toolMode: 'compact'` exposing 6 high-signal tools with curated descriptions and schema-constrained parameters to eliminate hallucinated tool choices and preserve context window budget.
-- **Session-Scoped Multi-Workspace Resolution**: Resolves project paths dynamically from DSH session context (`toolContext.agent.session.header.cwd`), ancestor graph detection, or configured overrides—enabling a single DSH instance to serve multiple workspaces safely.
-- **Graph Freshness & Concurrency-Safe Updates**: Git- and mtime-based graph staleness detection with durable v3 per-path baseline tracking, configurable warning (`freshness: { mode: 'warn' }`), and automatic deduplicated incremental updating (`freshness: { mode: 'auto' }`) via `ProjectUpdateCoalescer`.
-- **Diagnostic Doctor Tool (`graphify_status`)**: Environment diagnostic inspection for models and developers, reporting runtime resolution, connection states, project paths, staleness metrics, baseline availability, and actionable remediation advice.
-- **Decision Policy Prompting**: Injects high-agency navigation rules into the agent loop, teaching models when to use Graphify vs. grep/filesystem tools, and enforcing the authoritative verification loop (Graphify -> source files -> editor -> tests -> update).
+- **Operating Systems**: Tested and verified on **macOS** and **Linux** (Ubuntu 22.04 / 24.04). Windows is experimental / unverified.
+- **Node.js**: `^22.19 || >=24` (tested on Node 22.x and 24.x).
+- **DeepSeek Harness**: Tested with DSH session baseline (`>=0.1.1-rc.2`), `@next`, and `@alpha` channels.
+- **Cordis**: `@deepseek-ai/cordis` `>=4.0.0 <5`.
+- **Default Graphify Runtime**: Tested against Graphify `0.9.57` (`graphifyy[mcp]==0.9.57`).
 
 ---
 
-## Installation
+## Installation & First-Run Guide
 
-### 1. Install Graphify
+### 1. Install Plugin
 
-Install Graphify with its MCP extra (required for `python -m graphify.serve`):
-
-```sh
-uv tool install 'graphifyy[mcp]'
-```
-
-Build the initial knowledge graph in your repository:
+Install the official published package through DeepSeek Harness's plugin marketplace or package manager:
 
 ```sh
-graphify .
+dsh plugin --profile <profile> add dsh-graphify
 ```
 
-### 2. Add Plugin to DeepSeek Harness
-
-Install the plugin into your DSH environment:
+or via pnpm:
 
 ```sh
 pnpm add dsh-graphify
 ```
+
+> [!NOTE]
+> **Official Distribution**: The official supported installation method is the published npm / DSH marketplace package (`dsh-graphify`).
+
+### 2. Install Graphify Runtime
+
+Graphify is an external local Python runtime dependency. We recommend installing the tested version pinned for v0.2.0 via `uv`:
+
+```sh
+uv tool install 'graphifyy[mcp]==0.9.57'
+```
+
+### 3. Graceful Degraded Startup & Dynamic Rediscovery
+
+If Graphify or `uv` is not installed yet, **the plugin still boots safely and never bricks your DSH profile**.
+- `graphify_status` reports `UNAVAILABLE` and prints exact copy-paste installation instructions.
+- Once you install Graphify, **you do not need to restart DSH**: `dsh-graphify` dynamically rediscovers the newly installed runtime on the next status check or tool invocation!
+
+### 4. First Project Quickstart
+
+1. Open DeepSeek Harness in your repository:
+   ```sh
+   cd /path/to/my-repo
+   dsh
+   ```
+2. Build the initial knowledge graph using the slash command:
+   ```text
+   /graphify
+   ```
+3. Verify status:
+   ```text
+   graphify_status
+   ```
+4. Ask your agent questions:
+   ```text
+   "What are the main entry points and god nodes in this repository?"
+   ```
+
+---
+
+## Configuration
 
 Add the plugin to your DSH configuration or profile patch (e.g. `cordis.patch.yml` or `cordis.yml`):
 
@@ -49,11 +82,12 @@ Add the plugin to your DSH configuration or profile patch (e.g. `cordis.patch.ym
     - id: dsh-graphify
       name: dsh-graphify
       config:
-        toolMode: compact       # Recommended for 20B-30B models (compact | full)
+        toolMode: full          # 'full' (default, 15 tools) | 'compact' (recommended for local 20B-30B models, 6 tools)
         freshness:
-          mode: warn            # Freshness monitoring (warn | auto | off)
+          mode: warn            # Freshness monitoring: warn (default) | auto | off
           updateTimeoutMs: 120000
         autoDetect: true        # Walk parent directories to locate graphify-out/
+        allowExternalProjects: false # Default false: restrict model tool calls to active session workspace
 ```
 
 ---
@@ -164,6 +198,7 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 | `enablePromptSection` | `boolean` | `true` | Inject decision policy and navigation rules into agent system prompt. |
 | `timeoutMs` | `number` | `60000` | Per-MCP-operation timeout in milliseconds. |
 | `toolPrefix` | `string` | `''` | Prefix applied to all registered tool names (e.g. `graphify_`). |
+| `allowExternalProjects` | `boolean` | `false` | Allow model tool calls to access projects outside active session workspace. |
 | `reconnect.enabled` | `boolean` | `true` | Enable automatic reconnection on unexpected process exits. |
 | `reconnect.maxAttempts` | `number` | `10` | Maximum consecutive automatic reconnect attempts. |
 | `reconnect.initialDelayMs`| `number` | `500` | Initial exponential backoff delay for reconnection. |
@@ -173,12 +208,10 @@ In interactive DSH adapters supporting `ctx.commands`, `/graphify` provides dire
 
 ## DeepSeek Harness Compatibility
 
-`dsh-graphify` declares explicit `peerDependencies` supported across DeepSeek Harness releases:
+`dsh-graphify` declares intentional, bounded dependency ranges supported across DeepSeek Harness releases:
 
-- **Cordis Microkernel**: Supports `@deepseek-ai/cordis` `>=4.0.0` (including `^4.0.1` and `4.0.2`).
-- **DSH Session & Core**: Supports `@deepseek-ai/dsh-session` `>=0.1.1-rc.2`.
-- **DSH Commands**: Supports `@deepseek-ai/dsh-commands` `>=0.1.1-rc.2`.
-- **DSH Client UI & Locale**: Supports `@deepseek-ai/dsh-client-locale` and `@deepseek-ai/dsh-client-ui-conversation` `>=0.1.1-rc.2`.
+- **Cordis Microkernel**: Runtime peer dependency `@deepseek-ai/cordis` bounded to `>=4.0.0 <5`.
+- **DSH Client Composition**: Browser modules declare direct client-module runtime dependencies in `dsh.client.inject` (`@deepseek-ai/dsh-client-locale`, `@deepseek-ai/dsh-client-ui-conversation`, and `@deepseek-ai/dsh-client-ui-primitives`). Type-only dependencies are strictly scoped to compile time.
 - **Continuous Compatibility**: CI tests the supported baseline on Node 22/24 across Ubuntu and macOS. A scheduled compatibility workflow runs weekly against upstream `@next` and `@alpha` channels to proactively verify package compatibility.
 - **Contract Drift Detection**: Automated schema drift tests (`pnpm run test:drift`) prevent breaking changes between Graphify MCP schemas and plugin definitions.
 

@@ -3,7 +3,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config } from './config.ts'
-import { resolveGraphifyCliCommand, terminateChildProcess } from './server-process.ts'
+import {
+  resolveGraphifyCliCommand,
+  resolveGraphifyCliRuntime,
+  terminateChildProcess,
+  DEFAULT_GRAPHIFY_VERSION,
+} from './server-process.ts'
 import {
   INDEX_METADATA_FILENAME,
   readGraphifyIndexMetadata,
@@ -134,7 +139,14 @@ export function registerGraphifyCommand(
       try {
         const projectRoot = invocation.agent.session.header.cwd || defaultProjectRoot
         const request = parseGraphifyCommand(invocation.rawInput, projectRoot)
-        const { command, args } = resolveGraphifyCliCommand(config, request)
+        const cliResolution = resolveGraphifyCliRuntime(config, request)
+        if (!cliResolution.available) {
+          return {
+            kind: 'error',
+            text: `Graphify is not installed.\n\nInstall it with:\n  uv tool install 'graphifyy[mcp]==${DEFAULT_GRAPHIFY_VERSION}'\n\nor configure \`cliCommand\` in cordis.yml.`,
+          }
+        }
+        const { command, args } = cliResolution
         const canonicalGraphJson = path.join(request.projectRoot, 'graphify-out', 'graph.json')
 
         if (request.operation === 'build') {
