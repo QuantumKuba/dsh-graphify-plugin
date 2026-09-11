@@ -3,9 +3,9 @@ node_modules/
 .pnpm-store/
 
 # Build outputs
-lib/
 dist/
 *.tsbuildinfo
+*.tgz
 
 # OS and IDE files
 .DS_Store
