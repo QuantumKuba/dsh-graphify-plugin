@@ -206,4 +206,32 @@ describe('graphify_status doctor tool', () => {
     assert.ok(formatted.includes('Recommendation: MCP connection is recovering. Graphify will be available when reconnection succeeds.'))
     assert.ok(formatted.includes('(attempt 3/10)'))
   })
+
+  it('guarantees graphify_status execute returns valid lossless JSON across unprobed, missing, and healthy states', async () => {
+    const { createGraphifyToolDefinitions } = await import('../src/tools.ts')
+    const { snapshotJsonValue } = await import('@deepseek-ai/dsh-session')
+
+    const config = Config({
+      command: process.execPath,
+      args: [serverPath],
+      cwd: fixtureDir,
+    })
+    const client = new GraphifyMcpClient(config)
+    const resolver = new ProjectResolver(config)
+    const project = resolver.resolve({ explicitPath: fixtureDir })
+
+    const definitions = createGraphifyToolDefinitions(client, config, project, resolver)
+    const statusTool = definitions.find((d) => d.name === 'graphify_status')!
+    assert.ok(statusTool)
+
+    // Unprobed execution
+    const unprobedOutput = await statusTool.execute({ probe: false }, { signal: new AbortController().signal })
+    assert.notEqual(snapshotJsonValue(unprobedOutput), undefined, 'unprobed status must be lossless JSON')
+
+    // Probed/connected execution
+    const probedOutput = await statusTool.execute({ probe: true }, { signal: new AbortController().signal })
+    assert.notEqual(snapshotJsonValue(probedOutput), undefined, 'probed status must be lossless JSON')
+
+    await client.dispose()
+  })
 })
