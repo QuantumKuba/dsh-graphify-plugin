@@ -64,7 +64,6 @@
   "scripts": {
     "clean": "rm -rf lib",
     "build": "tsc && tsdown",
-    "prepare": "tsc && tsdown",
     "test": "node --import tsx --test test/*.test.ts",
     "test:e2e": "node --import tsx --test test/graphify-e2e.test.ts",
     "test:drift": "node --import tsx --test test/schema-drift.test.ts",
