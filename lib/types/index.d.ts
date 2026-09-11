@@ -13,6 +13,7 @@ export { resolveGraphifyCommand, resolveGraphifyCliCommand, resolveGraphifyRunti
 export { ProjectResolver } from './project-resolver.ts';
 export { checkGraphFreshness, ProjectUpdateCoalescer, writeGraphifyIndexMetadata, readGraphifyIndexMetadata, INDEX_METADATA_FILENAME, } from './freshness.ts';
 export { collectGraphifyStatus, formatGraphifyStatus } from './status.ts';
+export { toLosslessJson } from './lossless-json.ts';
 export { getPackageVersion } from './version.ts';
 /**
  * DeepSeek Harness Graphify Plugin.
