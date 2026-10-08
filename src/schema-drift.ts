@@ -28,6 +28,7 @@ export interface SchemaDriftReport {
 
 /** Plugin-local tool suffixes — these exist only in dsh-graphify and do not correspond to upstream Graphify MCP tools. */
 const PLUGIN_LOCAL_SUFFIXES = [
+  'find_code',
   'graphify_status',
   'graphify_capabilities',
   'graphify_call',

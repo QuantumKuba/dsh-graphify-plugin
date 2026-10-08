@@ -81,7 +81,7 @@ describe('Graphify release contract', () => {
     const { compareToolSchemas } = await import('../src/schema-drift.ts')
     const { createGraphifyToolDefinitions } = await import('../src/tools.ts')
 
-    const config = Config({ command: 'auto' })
+    const config = Config({ command: 'auto', toolMode: 'full' })
     const resolved = resolveGraphifyCommand(config, graphPath)
     const client = new GraphifyMcpClient({ ...resolved, cwd: fixtureDir, timeoutMs: 30_000 })
     try {
@@ -129,7 +129,7 @@ describe('Graphify release contract', () => {
     // Dirty working tree before build: edit calc.py to B
     fs.writeFileSync(path.join(tempDir, 'calc.py'), 'def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n')
 
-    const config = Config({ command: 'auto', cliCommand: 'graphify' })
+    const config = Config({ command: 'auto', cliCommand: 'graphify', toolMode: 'full' })
     const ctx = new Context()
     let command: CommandDefinition | undefined
     ctx.provide('commands')

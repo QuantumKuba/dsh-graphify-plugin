@@ -286,6 +286,7 @@ describe('Schema Drift Detection', () => {
       assert.equal(getCanonicalGraphifyName(`${prefix}triage_prs`), 'triage_prs')
 
       // Plugin-local tools must return null (excluded from drift checks)
+      assert.equal(getCanonicalGraphifyName(`${prefix}find_code`), null)
       assert.equal(getCanonicalGraphifyName(`${prefix}graphify_status`), null)
       assert.equal(getCanonicalGraphifyName(`${prefix}graphify_capabilities`), null)
       assert.equal(getCanonicalGraphifyName(`${prefix}graphify_call`), null)
