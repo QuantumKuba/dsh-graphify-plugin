@@ -9,6 +9,13 @@ export interface GraphifyToolOutput {
     meta?: unknown;
 }
 /**
+ * Projects verbose Graphify traversal text into source candidates and a small
+ * relationship sample. Candidate order remains stable within each source tier.
+ * @param text Raw `query_graph` text.
+ * @returns Compact model-visible navigation evidence.
+ */
+export declare function formatNavigationResult(text: string): string;
+/**
  * Resolves the prefixed tool name consistently without accidental prefix collisions.
  * e.g. prefix 'graphify_' + 'query_graph' -> 'graphify_query_graph'
  *      prefix 'graphify_' + 'graphify_status' -> 'graphify_status' (preserved)

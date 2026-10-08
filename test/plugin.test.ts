@@ -56,6 +56,7 @@ describe('Graphify Plugin Integration', () => {
       args: [serverPath],
       autoDetect: true,
       enablePromptSection: true,
+      toolMode: 'full',
     })
 
     try {
@@ -64,12 +65,13 @@ describe('Graphify Plugin Integration', () => {
       const promptSec = registeredSections.get('graphify:guidance')!
       assert.equal(promptSec.order, 250)
       const promptText = typeof promptSec.text === 'function' ? promptSec.text({}) : promptSec.text
-      assert.ok(promptText.includes('Graphify Knowledge Graph'))
+      assert.ok(promptText.includes('Graphify navigation'))
       assert.ok(promptText.includes('query_graph'))
 
       // 2. Verify native tools plus forward-compatible capability accessors and doctor status tool
-      assert.equal(registeredTools.size, 15)
+      assert.equal(registeredTools.size, 16)
       const expectedTools = [
+        'find_code',
         'query_graph',
         'get_node',
         'get_neighbors',
@@ -225,6 +227,7 @@ describe('Graphify Plugin Integration', () => {
       command: process.execPath,
       args: [serverPath],
       toolPrefix: 'kg_',
+      toolMode: 'full',
       enablePromptSection: false,
     })
 

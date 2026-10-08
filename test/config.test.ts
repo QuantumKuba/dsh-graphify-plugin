@@ -7,7 +7,8 @@ describe('Configuration Validation', () => {
     const config = Config({})
     assert.doesNotThrow(() => validateConfig(config))
     assert.equal(config.timeoutMs, 60000)
-    assert.equal(config.toolMode, 'full')
+    assert.equal(config.toolMode, 'compact')
+    assert.equal(config.resultTokenBudget, 800)
     assert.equal(config.freshness.mode, 'warn')
     assert.equal(config.freshness.updateTimeoutMs, 120000)
     assert.equal(config.reconnect.enabled, true)
@@ -32,6 +33,14 @@ describe('Configuration Validation', () => {
     const config = Config({})
     ;(config as { toolMode: unknown }).toolMode = 'medium'
     assert.throws(() => validateConfig(config), /toolMode must be 'compact' or 'full'/)
+  })
+
+  it('rejects a non-positive or fractional resultTokenBudget', () => {
+    const configZero = Config({ resultTokenBudget: 0 })
+    assert.throws(() => validateConfig(configZero), /resultTokenBudget must be a positive integer/)
+
+    const configFraction = Config({ resultTokenBudget: 1.5 })
+    assert.throws(() => validateConfig(configFraction), /resultTokenBudget must be a positive integer/)
   })
 
   it('rejects invalid freshness.mode', () => {

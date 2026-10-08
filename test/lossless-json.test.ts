@@ -88,6 +88,7 @@ describe('Lossless JSON serialization & tool output contract', () => {
       command: process.execPath,
       args: [serverPath],
       cwd: fixtureDir,
+      toolMode: 'full',
     })
     const client = new GraphifyMcpClient(config)
     const resolver = new ProjectResolver(config)
@@ -124,6 +125,7 @@ describe('Lossless JSON serialization & tool output contract', () => {
       args: [serverPath],
       cwd: tempDir,
       allowExternalProjects: true,
+      toolMode: 'full',
     })
     const client = new GraphifyMcpClient(config)
     const resolver = new ProjectResolver(config)
@@ -162,6 +164,7 @@ describe('Lossless JSON serialization & tool output contract', () => {
       command: process.execPath,
       args: [serverPath],
       cwd: fixtureDir,
+      toolMode: 'full',
     })
     const client = new GraphifyMcpClient(config)
     const resolver = new ProjectResolver(config)
@@ -195,6 +198,7 @@ describe('Lossless JSON serialization & tool output contract', () => {
       command: process.execPath,
       args: [serverPath],
       cwd: fixtureDir,
+      toolMode: 'full',
     })
     const client = new GraphifyMcpClient(config)
     const resolver = new ProjectResolver(config)

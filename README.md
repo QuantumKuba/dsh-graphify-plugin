@@ -80,9 +80,13 @@ Which community owns authentication, and where does it connect to the API layer?
 
 ## Pick a mode
 
-The default `full` mode exposes the complete Graphify capability set, including communities, god nodes, and pull-request impact. Use it when your model has ample tool-selection capacity or you need those specialist queries.
+The default `compact` mode exposes only `find_code`. It accepts the whole navigation question, performs one depth-one graph query, ranks implementation files ahead of tests and examples, and returns at most ten source locations plus six recorded relationships. The model then verifies those locations with normal source tools. This avoids making small models plan chains of `get_node`, `query_graph`, and `get_neighbors` calls.
 
-For local 20B–30B models, use `compact`. It registers six high-frequency tools: status, graph query, node inspection, neighbours, shortest path, and the session-scoped graph resource. Fewer choices help smaller models use the graph consistently.
+Use `full` when you need communities, god nodes, pull-request impact, raw resources, or forward-compatible capability access. For blast-radius questions, prefer an exact node plus relation-filtered neighbours and verify callers in source. Missing graph edges do not prove absence, and graph paths do not establish execution order.
+
+Compact mode uses the session workspace and configured output budget. Upstream queries receive an 800-token budget, and every model-visible result has a hard 4,000-character limit. Raw MCP metadata remains available in the persisted result. If discovery is empty or irrelevant, use targeted filesystem search.
+
+Keep `compact` for limited model context; larger models can also use it. Increase budgets only when truncation hides needed evidence, and choose `full` for advanced controls rather than based on model size alone.
 
 Add an override only when you need one:
 
@@ -91,7 +95,8 @@ Add an override only when you need one:
     - id: dsh-graphify
       name: dsh-graphify
       config:
-        toolMode: compact
+        toolMode: full
+        resultTokenBudget: 1200
         freshness:
           mode: warn
 ```
@@ -112,8 +117,8 @@ Add an override only when you need one:
 | --- | --- |
 | Build or fully refresh the graph | `/graphify` or `/graphify build` |
 | Update changed code files | `/graphify update` |
-| Diagnose installation, project selection, or stale data | `graphify_status` |
-| Find a symbol and related architecture | Ask the agent to query the graph, then inspect the returned nodes and paths. |
+| Diagnose installation, project selection, or stale data | Ask for diagnosis in `full` mode, or use `/graphify` to rebuild the current project. |
+| Find a symbol and related architecture | Ask the agent to use `find_code` once, then inspect the ranked source locations. |
 | Analyse a risky change | Ask for dependents, shortest paths, communities, or PR impact before editing. |
 
 `/graphify update` is intentionally conservative. Run `/graphify` after changes to Markdown, package metadata, configuration, or any other non-code source that should be represented in the graph.
@@ -124,7 +129,9 @@ The defaults work for most single-repository sessions. These are the settings us
 
 | Setting | Default | Use it when |
 | --- | --- | --- |
-| `toolMode` | `full` | Set `compact` for focused navigation with smaller local models. |
+| `toolMode` | `compact` | Set `full` for specialist graph, PR, resource, and capability tools. |
+| `resultTokenBudget` | `800` | Upstream budget for tools that support it; a tokenizer-dependent estimate. |
+| `resultMaxChars` | `4000` | Hard model-visible text limit for all tools, including resources and diagnostics; minimum 256. |
 | `freshness.mode` | `warn` | Set `auto` for safe pre-query code updates, or `off` for an intentionally static graph. |
 | `graphifyVersion` | unset | Pin the Graphify version used by automatic `uv` fallback. |
 | `graphPath` | auto-detected | Point to a non-standard `graph.json` location. |

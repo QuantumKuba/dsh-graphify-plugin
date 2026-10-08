@@ -71,6 +71,9 @@
     "test:e2e": "node --import tsx --test test/graphify-e2e.test.ts",
     "test:drift": "node --import tsx --test test/schema-drift.test.ts",
     "typecheck": "tsc --noEmit",
+    "benchmark": "node --import tsx benchmark/run.ts",
+    "benchmark:dsh": "node --import tsx benchmark/run-dsh.ts",
+    "benchmark:setup": "node --import tsx benchmark/setup.ts",
     "prepublishOnly": "pnpm run clean && pnpm run build && pnpm test"
   },
   "dependencies": {

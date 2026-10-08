@@ -47,3 +47,4 @@ tmp/
 temp/
 
 /graphify-out/
+benchmark/data/

@@ -84,7 +84,7 @@ process.exit(0)
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    const queryTool = tools.find((t) => t.name === 'query_graph')!
+    const queryTool = tools.find((t) => t.name === 'find_code')!
 
     const execContext = {
       signal: new AbortController().signal,
@@ -214,7 +214,7 @@ process.exit(0)
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    const queryTool = tools.find((t) => t.name === 'query_graph')!
+    const queryTool = tools.find((t) => t.name === 'find_code')!
 
     const execContext = {
       signal: new AbortController().signal,
@@ -288,7 +288,7 @@ process.exit(0)
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    const queryTool = tools.find((t) => t.name === 'query_graph')!
+    const queryTool = tools.find((t) => t.name === 'find_code')!
 
     const execContext = {
       signal: new AbortController().signal,
@@ -348,7 +348,7 @@ process.exit(0)
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    const queryTool = tools.find((t) => t.name === 'query_graph')!
+    const queryTool = tools.find((t) => t.name === 'find_code')!
 
     const execContext = {
       signal: new AbortController().signal,
@@ -499,7 +499,7 @@ process.exit(0)
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    const queryTool = tools.find((t) => t.name === 'query_graph')!
+    const queryTool = tools.find((t) => t.name === 'find_code')!
 
     const execContext = {
       signal: new AbortController().signal,
@@ -588,7 +588,7 @@ process.exit(0)
     })
 
     const tools = createGraphifyToolDefinitions(client, config)
-    const queryTool = tools.find((t) => t.name === 'query_graph')!
+    const queryTool = tools.find((t) => t.name === 'find_code')!
 
     const execContext = {
       signal: new AbortController().signal,

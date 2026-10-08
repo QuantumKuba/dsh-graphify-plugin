@@ -20,6 +20,7 @@ describe('graphify_status doctor tool', () => {
       command: process.execPath,
       args: [serverPath],
       cwd: fixtureDir,
+      toolMode: 'full',
     })
     const client = new GraphifyMcpClient({
       command: process.execPath,
@@ -215,6 +216,7 @@ describe('graphify_status doctor tool', () => {
       command: process.execPath,
       args: [serverPath],
       cwd: fixtureDir,
+      toolMode: 'full',
     })
     const client = new GraphifyMcpClient(config)
     const resolver = new ProjectResolver(config)

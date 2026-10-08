@@ -39,10 +39,11 @@ describe('Built Library Distribution', () => {
       args: [serverPath],
       autoDetect: true,
       enablePromptSection: true,
+      toolMode: 'full',
     })
 
     try {
-      assert.equal(registeredTools.size, 15)
+      assert.equal(registeredTools.size, 16)
       assert.ok(registeredSections.has('graphify:guidance'))
 
       const statsTool = registeredTools.get('graph_stats')!

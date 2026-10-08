@@ -61,10 +61,19 @@ export interface Config {
   /**
    * Tool surface mode.
    * - 'full': Registers the complete Graphify tool surface (all 10 native tools, doctor, and escape hatches).
-   * - 'compact': Registers a focused 6-tool surface tailored for smaller local models (20B-30B class).
-   * Defaults to 'full'.
+   * - 'compact': Registers one task-level source navigation tool.
+   * Defaults to 'compact' to reduce the tool schemas included in every model request.
    */
   toolMode: 'compact' | 'full'
+
+  /**
+   * Default and maximum output budget for Graphify tools that accept
+   * `token_budget`. Callers may request a smaller result but not a larger one.
+   */
+  resultTokenBudget: number
+
+  /** Maximum model-visible UTF-16 text length per result, including notices. */
+  resultMaxChars: number
 
   /**
    * Freshness monitoring and auto-update configuration.
@@ -120,7 +129,9 @@ export const Config: Schema<Config> = Schema.object({
   enablePromptSection: Schema.boolean().default(true).description('Register system prompt guidance for Graphify tools'),
   timeoutMs: Schema.number().default(60000).description('Per-tool-call timeout in milliseconds'),
   toolPrefix: Schema.string().default('').description('Optional prefix for registered tool names'),
-  toolMode: Schema.union(['compact', 'full']).default('full').description('Tool surface mode: compact for local models, full for complete suite'),
+  toolMode: Schema.union(['compact', 'full']).default('compact').description('Tool mode: one source-navigation tool in compact mode, or the complete suite in full mode'),
+  resultTokenBudget: Schema.number().default(800).description('Default and maximum token budget for bounded Graphify query results'),
+  resultMaxChars: Schema.number().default(4000).description('Maximum rendered result characters for every Graphify tool; independent of tokenizer'),
   freshness: Schema.object({
     mode: Schema.union(['off', 'warn', 'auto']).default('warn').description('Graph freshness mode (off, warn, auto)'),
     updateTimeoutMs: Schema.number().default(120000).description('Max wait time for incremental graph update'),
@@ -150,6 +161,14 @@ export function validateConfig(config: Config): void {
 
   if (config.toolMode !== 'compact' && config.toolMode !== 'full') {
     throw new Error(`Invalid dsh-graphify configuration: toolMode must be 'compact' or 'full', got '${config.toolMode}'.`)
+  }
+
+  if (!Number.isInteger(config.resultTokenBudget) || config.resultTokenBudget <= 0) {
+    throw new Error(`Invalid dsh-graphify configuration: resultTokenBudget must be a positive integer, got ${config.resultTokenBudget}.`)
+  }
+
+  if (!Number.isSafeInteger(config.resultMaxChars) || config.resultMaxChars < 256) {
+    throw new Error('Invalid dsh-graphify configuration: resultMaxChars must be a safe integer of at least 256.')
   }
 
   if (config.freshness) {

@@ -1,0 +1,363 @@
+{
+  "timestamp": "2026-09-15T00:58:30.500Z",
+  "targetCodebase": {
+    "name": "express",
+    "version": "v4.21.2",
+    "path": "/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express",
+    "nodes": 425,
+    "edges": 639
+  },
+  "taskCount": 1,
+  "control": {
+    "successRate": 100,
+    "meanInputTokens": 57611,
+    "medianInputTokens": 57611,
+    "meanTotalTokens": 59705,
+    "medianTotalTokens": 59705,
+    "meanTurns": 1,
+    "medianTurns": 1,
+    "meanToolCalls": 6,
+    "meanIrrelevantFiles": 1,
+    "meanTtff": 1,
+    "meanDurationMs": 122500
+  },
+  "treatment": {
+    "successRate": 100,
+    "meanInputTokens": 47530,
+    "medianInputTokens": 47530,
+    "meanTotalTokens": 49215,
+    "medianTotalTokens": 49215,
+    "meanTurns": 1,
+    "medianTurns": 1,
+    "meanToolCalls": 4,
+    "meanIrrelevantFiles": 1,
+    "meanTtff": 1,
+    "meanDurationMs": 143709
+  },
+  "deltas": {
+    "tokenReductionRatio": 1.2,
+    "tokenSavingsPercent": 18,
+    "turnReductionPercent": 0,
+    "toolCallReductionPercent": 33,
+    "noiseReductionPercent": 0,
+    "successRateDelta": 0,
+    "speedupRatio": 0.9
+  },
+  "statistics": {
+    "totalTokens": {
+      "metricName": "totalTokens",
+      "sampleSize": 1,
+      "controlMean": 59705,
+      "controlStd": 0,
+      "treatmentMean": 49215,
+      "treatmentStd": 0,
+      "meanDifference": -10490,
+      "percentageChange": -17.56971777908048,
+      "stdDifference": 0,
+      "standardError": 0,
+      "ci95Parametric": [
+        -10490,
+        -10490
+      ],
+      "ci95Bootstrap": [
+        -10490,
+        -10490
+      ],
+      "tStatistic": 0,
+      "tPValue": 1,
+      "wilcoxonW": 0,
+      "wilcoxonPValue": 0.9999999979441401,
+      "cohensD": 0,
+      "isStatisticallySignificant": false
+    },
+    "irrelevantFiles": {
+      "metricName": "irrelevantFiles",
+      "sampleSize": 1,
+      "controlMean": 1,
+      "controlStd": 0,
+      "treatmentMean": 1,
+      "treatmentStd": 0,
+      "meanDifference": 0,
+      "percentageChange": 0,
+      "stdDifference": 0,
+      "standardError": 0,
+      "ci95Parametric": [
+        0,
+        0
+      ],
+      "ci95Bootstrap": [
+        0,
+        0
+      ],
+      "tStatistic": 0,
+      "tPValue": 1,
+      "wilcoxonW": 0,
+      "wilcoxonPValue": 1,
+      "cohensD": 0,
+      "isStatisticallySignificant": false
+    },
+    "durationMs": {
+      "metricName": "durationMs",
+      "sampleSize": 1,
+      "controlMean": 122500,
+      "controlStd": 0,
+      "treatmentMean": 143709,
+      "treatmentStd": 0,
+      "meanDifference": 21209,
+      "percentageChange": 17.313469387755102,
+      "stdDifference": 0,
+      "standardError": 0,
+      "ci95Parametric": [
+        21209,
+        21209
+      ],
+      "ci95Bootstrap": [
+        21209,
+        21209
+      ],
+      "tStatistic": 0,
+      "tPValue": 1,
+      "wilcoxonW": 0,
+      "wilcoxonPValue": 0.9999999979441401,
+      "cohensD": 0,
+      "isStatisticallySignificant": false
+    },
+    "turns": {
+      "metricName": "turns",
+      "sampleSize": 1,
+      "controlMean": 1,
+      "controlStd": 0,
+      "treatmentMean": 1,
+      "treatmentStd": 0,
+      "meanDifference": 0,
+      "percentageChange": 0,
+      "stdDifference": 0,
+      "standardError": 0,
+      "ci95Parametric": [
+        0,
+        0
+      ],
+      "ci95Bootstrap": [
+        0,
+        0
+      ],
+      "tStatistic": 0,
+      "tPValue": 1,
+      "wilcoxonW": 0,
+      "wilcoxonPValue": 1,
+      "cohensD": 0,
+      "isStatisticallySignificant": false
+    },
+    "inspectionPrecision": {
+      "metricName": "inspectionPrecision",
+      "sampleSize": 1,
+      "controlMean": 0.3333333333333333,
+      "controlStd": 0,
+      "treatmentMean": 0.3333333333333333,
+      "treatmentStd": 0,
+      "meanDifference": 0,
+      "percentageChange": 0,
+      "stdDifference": 0,
+      "standardError": 0,
+      "ci95Parametric": [
+        0,
+        0
+      ],
+      "ci95Bootstrap": [
+        0,
+        0
+      ],
+      "tStatistic": 0,
+      "tPValue": 1,
+      "wilcoxonW": 0,
+      "wilcoxonPValue": 1,
+      "cohensD": 0,
+      "isStatisticallySignificant": false
+    }
+  },
+  "tasks": [
+    {
+      "taskId": "task-01-route-match",
+      "title": "Route Path Matching & Layer Evaluation",
+      "category": "discovery",
+      "controlTokens": 59705,
+      "treatmentTokens": 49215,
+      "tokenSavingsPercent": 18,
+      "controlTurns": 1,
+      "treatmentTurns": 1,
+      "controlIrrelevantFiles": 1,
+      "treatmentIrrelevantFiles": 1,
+      "controlSuccess": true,
+      "treatmentSuccess": true,
+      "controlTtff": 1,
+      "treatmentTtff": 1
+    }
+  ],
+  "rawTrials": [
+    {
+      "taskId": "task-01-route-match",
+      "taskTitle": "Route Path Matching & Layer Evaluation",
+      "arm": "control",
+      "success": true,
+      "turns": 1,
+      "toolCalls": 6,
+      "inputTokens": 57611,
+      "outputTokens": 2094,
+      "totalTokens": 59705,
+      "durationMs": 122500,
+      "inspectedFiles": [
+        "lib/router/layer.js",
+        "lib/router/index.js",
+        "package.json"
+      ],
+      "irrelevantFiles": [
+        "package.json"
+      ],
+      "turnsToFirstCorrectFile": 1,
+      "finalAnswer": "This repo is Express **4.21.2**, and route matching lives in the `Router` internals:\n\n## The answer: `Layer` class, `Layer.prototype.match` — `lib/router/layer.js`\n\n**1. Regex construction — `Layer` constructor (line 45):**\n```js\nvar pathRegexp = require('path-to-regexp');   // v0.1.12 (package.json line 54)\n...\nthis.regexp = pathRegexp(path, this.keys = [], opts);\n```\nEach layer (registered route path) is compiled **once at registration time** via the legacy `path-to-regexp@0.x` API, which turns a path like `'/users/:id'` into a single `RegExp` and collects the named params into `this.keys`. The actual regex-building logic is in the external `path-to-regexp` dependency — Express's own source contains no regex construction of its own.\n\nThe constructor also sets two fast-path flags (lines 48–49):\n```js\nthis.regexp.fast_star  = path === '*'\nthis.regexp.fast_slash = path === '/' && opts.end === false\n```\n\n**2. The match test — `Layer.prototype.match(path)` (lines 110–156):**\n```js\nLayer.prototype.match = function match(path) {\n  ...\n  // fast paths for fast_slash and fast_star (lines 113-126)\n  ...\n  match = this.regexp.exec(path)   // line 129 — the actual evaluation\n  ...\n  this.params = {};\n  this.path = match[0]\n  // lines 145-153: populate this.params from match captures + this.keys,\n  // decoded via decode_param() (throws a 400 URIError on bad %XX encoding)\n  return true;\n};\n```\nThe core evaluation is **`this.regexp.exec(path)` at line 129**. On a hit it stores the matched segment in `this.path` and the decoded named params in `this.params`; on a miss it clears both and returns `false`.\n\n**3. Call site in the router — `lib/router/index.js`:**\nThe router's per-layer dispatch loop in `process_params` calls `matchLayer(layer, path)` (line 226), which is a thin try/catch wrapper (lines 583–589):\n```js\nfunction matchLayer(layer, path) {\n  try {\n    return layer.match(path);\n  } catch (err) {\n    return err;   // e.g. decode_param URIError → propagated as a 400\n  }\n}\n```\nAfter a successful match, `req.params` is set from `layer.params` (line ~271) and `layer.handle_request(...)` dispatches to the route handler.\n\n**TL;DR:** `Layer` (lib/router/layer.js) — the regex is built in the constructor via `path-to-regexp` (line 45), and the match test is `Layer.prototype.match` (line 110), specifically `this.regexp.exec(path)` at line 129. (Note: Express 5 rewrote this with `path-to-regexp` v6+ and `router.use()` semantics; this codebase is still the 4.x design.)",
+      "toolHistory": [
+        {
+          "turn": 1,
+          "toolName": "glob",
+          "args": {
+            "pattern": "lib/router/*.js"
+          },
+          "outputSummary": "lib/router/index.js lib/router/layer.js lib/router/route.js",
+          "outputLength": 59,
+          "tokenEstimate": 15
+        },
+        {
+          "turn": 1,
+          "toolName": "bash",
+          "args": {
+            "command": "grep -rn \"path-to-regexp\" lib/ | head -20",
+            "description": "Find path-to-regexp usage in lib"
+          },
+          "outputSummary": "lib/router/layer.js:16:var pathRegexp = require('path-to-regexp'); ",
+          "outputLength": 67,
+          "tokenEstimate": 17
+        },
+        {
+          "turn": 1,
+          "toolName": "read",
+          "args": {
+            "file_path": "/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express/lib/router/layer.js"
+          },
+          "outputSummary": "<path>/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express/lib/router/layer.js</path> <type>file</type> <content> 1: /*! 2:  * express 3:  * Copyright(c) 2009-20",
+          "outputLength": 4269,
+          "tokenEstimate": 1067
+        },
+        {
+          "turn": 1,
+          "toolName": "bash",
+          "args": {
+            "command": "grep -n \"match_path\\|\\.match(\\|process_params\\|path-to-regexp\" lib/router/index.js; grep -n '\"version\"' package.json; grep -n 'path-to-regexp' package.json",
+            "description": "Find router call site and versions"
+          },
+          "outputSummary": "280:    self.process_params(layer, paramcalled, req, res, function (err) { 338:proto.process_params = function process_params(layer, called, req, res, done) { 585:    return layer.",
+          "outputLength": 253,
+          "tokenEstimate": 63
+        },
+        {
+          "turn": 1,
+          "toolName": "read",
+          "args": {
+            "file_path": "/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express/lib/router/index.js",
+            "offset": 560,
+            "limit": 45
+          },
+          "outputSummary": "<path>/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express/lib/router/index.js</path> <type>file</type> <content> 560: } 561:  562: // get type for error message",
+          "outputLength": 1194,
+          "tokenEstimate": 299
+        },
+        {
+          "turn": 1,
+          "toolName": "bash",
+          "args": {
+            "command": "grep -n \"matchLayer\" lib/router/index.js; sed -n '240,300p' lib/router/index.js",
+            "description": "Show matchLayer call site context"
+          },
+          "outputSummary": "226:      match = matchLayer(layer, path); 583:function matchLayer(layer, path) {         continue;       }        if (layerError) {         // routes do not match with a pending e",
+          "outputLength": 1529,
+          "tokenEstimate": 382
+        }
+      ],
+      "repetitionIndex": 0,
+      "presentationOrder": "control-first",
+      "inspectionPrecision": 0.3333333333333333,
+      "noiseRatio": 0.3333333333333333
+    },
+    {
+      "taskId": "task-01-route-match",
+      "taskTitle": "Route Path Matching & Layer Evaluation",
+      "arm": "treatment",
+      "success": true,
+      "turns": 1,
+      "toolCalls": 4,
+      "inputTokens": 47530,
+      "outputTokens": 1685,
+      "totalTokens": 49215,
+      "durationMs": 143709,
+      "inspectedFiles": [
+        "package.json",
+        "lib/router/layer.js",
+        "lib/router/index.js"
+      ],
+      "irrelevantFiles": [
+        "package.json"
+      ],
+      "turnsToFirstCorrectFile": 1,
+      "finalAnswer": "Found it. In this checkout (Express **4.21.2**):\n\n## The class and method\n\n**`Layer.prototype.match(path)`** in `lib/router/layer.js` (lines 110–156) — this is the method that tests whether a layer's path matches the incoming request URL.\n\n## How it works\n\n1. **Regex compilation — `Layer` constructor** (`layer.js:33-50`): when a route is registered, the pattern string is compiled once by `path-to-regexp` (v0.1.x):\n   ```js\n   this.regexp = pathRegexp(path, this.keys = [], opts);\n   ```\n   `opts` carries the `sensitive`, `strict`, and `end` flags from `app.route()`/router options. Two fast-path flags are set on the compiled regexp: `fast_star` (`path === '*'`) and `fast_slash` (`path === '/'` with `end: false`).\n\n2. **The test itself — `match`** (`layer.js:110`):\n   - `fast_slash` / `fast_star` short-circuits at lines 115 and 122;\n   - otherwise the core check is **`this.regexp.exec(path)`** (line 129);\n   - on a match it stores `this.path = match[0]` and populates `this.params` by zipping captured groups with `this.keys[i-1].name`, decoding each value via `decode_param` (`layer.js:166`, a `decodeURIComponent` wrapper that turns `URIError` into a 400);\n   - returns `false` (and clears `params`/`path`) when the regexp doesn't match.\n\n3. **Caller — the router**: `lib/router/index.js` walks the layer chain per request; the module-level helper `matchLayer(layer, path)` (`index.js:583-589`) invokes `layer.match(path)`, wrapping it in try/catch so a decode failure becomes a proper error response.\n\nSo: **class `Layer`** (`lib/router/layer.js`), **method `match`**, whose central operation is `this.regexp.exec(pathname)` on a `path-to-regexp`-compiled regex — while the separate `Route.prototype.match` (`lib/router/route.js`) only checks the HTTP method, and `Route`'s layers each do the path test via `Layer#match`.",
+      "toolHistory": [
+        {
+          "turn": 1,
+          "toolName": "bash",
+          "args": {
+            "command": "ls lib/router && node -e \"console.log(require('./package.json').version)\"",
+            "description": "List router lib files and Express version"
+          },
+          "outputSummary": "index.js layer.js route.js 4.21.2 ",
+          "outputLength": 34,
+          "tokenEstimate": 9
+        },
+        {
+          "turn": 1,
+          "toolName": "read",
+          "args": {
+            "file_path": "lib/router/layer.js"
+          },
+          "outputSummary": "<path>/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express/lib/router/layer.js</path> <type>file</type> <content> 1: /*! 2:  * express 3:  * Copyright(c) 2009-20",
+          "outputLength": 4269,
+          "tokenEstimate": 1067
+        },
+        {
+          "turn": 1,
+          "toolName": "grep",
+          "args": {
+            "pattern": "match_layer|\\.match\\(",
+            "path": "lib/router/index.js"
+          },
+          "outputSummary": "Found 1 match  lib/router/index.js Line 585:     return layer.match(path);",
+          "outputLength": 74,
+          "tokenEstimate": 19
+        },
+        {
+          "turn": 1,
+          "toolName": "read",
+          "args": {
+            "file_path": "lib/router/index.js",
+            "offset": 555,
+            "limit": 45
+          },
+          "outputSummary": "<path>/Users/kuba/Documents/Github/graphify-plugin-dse/benchmark/data/express/lib/router/index.js</path> <type>file</type> <content> 555:   var fqdnIndex = url.slice(0, pathLength)",
+          "outputLength": 1241,
+          "tokenEstimate": 310
+        }
+      ],
+      "repetitionIndex": 0,
+      "presentationOrder": "control-first",
+      "inspectionPrecision": 0.3333333333333333,
+      "noiseRatio": 0.3333333333333333
+    }
+  ]
+}

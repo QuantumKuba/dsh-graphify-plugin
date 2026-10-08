@@ -79,7 +79,7 @@ describe('Packed Package Clean-Machine Installation (Part I & J)', () => {
         ctx.provide('commands')
         ctx.commands = { register: (c: any) => { registeredCmds.set(c.name, c); return () => {} } }
 
-        fiber = await ctx.plugin(hostModule, { command: 'auto', cwd: consumerDir } as any)
+        fiber = await ctx.plugin(hostModule, { command: 'auto', cwd: consumerDir, toolMode: 'full' } as any)
 
         const statusTool = registeredTools.get('graphify_status')!
         const statusRes = await statusTool.execute({}, {
@@ -129,6 +129,7 @@ describe('Packed Package Clean-Machine Installation (Part I & J)', () => {
           command: process.execPath,
           args: [fakeServer],
           cwd: consumerDir,
+          toolMode: 'full',
         } as any)
 
         const statusTool = registeredTools.get('graphify_status')!
@@ -162,7 +163,7 @@ describe('Packed Package Clean-Machine Installation (Part I & J)', () => {
         cwd: projA,
       })
 
-      const config = hostModule.Config({ allowExternalProjects: false })
+      const config = hostModule.Config({ allowExternalProjects: false, toolMode: 'full' })
       const tools = hostModule.createGraphifyToolDefinitions(client, config)
       const resourceTool = tools.find((t) => t.name === 'graphify_project_resource')!
 

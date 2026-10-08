@@ -66,7 +66,7 @@ describe('Marketplace Startup & Resilience', () => {
       }
 
       // 1. Plugin apply MUST NOT throw even though Graphify and uv are completely absent
-      fiber = await ctx.plugin(GraphifyPlugin, { command: 'auto', cwd: emptyTempDir } as any)
+      fiber = await ctx.plugin(GraphifyPlugin, { command: 'auto', cwd: emptyTempDir, toolMode: 'full' } as any)
 
         // 2. Tools, commands, and prompt guidance are all registered
         assert.ok(registeredTools.has('graphify_status'), 'graphify_status doctor tool must be registered')
@@ -138,7 +138,7 @@ describe('Marketplace Startup & Resilience', () => {
         ctx.provide('commands')
         ctx.commands = { register: () => () => {} }
 
-        fiber = await ctx.plugin(GraphifyPlugin, { command: 'auto', cwd: tempProjectDir } as any)
+        fiber = await ctx.plugin(GraphifyPlugin, { command: 'auto', cwd: tempProjectDir, toolMode: 'full' } as any)
 
         // First check: status is unavailable
         const statusTool = registeredTools.get('graphify_status')!
@@ -257,7 +257,7 @@ describe('Model-Controlled Project Path Security (Part F)', () => {
     })
 
     try {
-      const config = Config({ allowExternalProjects: false })
+      const config = Config({ allowExternalProjects: false, toolMode: 'full' })
       const tools = createGraphifyToolDefinitions(client, config)
       const queryTool = tools.find((t) => t.name === 'query_graph')!
       const statusTool = tools.find((t) => t.name === 'graphify_status')!

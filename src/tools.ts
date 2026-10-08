@@ -22,6 +22,7 @@ import {
 } from './freshness.ts'
 import { collectGraphifyStatus, formatGraphifyStatus } from './status.ts'
 import { toLosslessJson } from './lossless-json.ts'
+import { boundResultText } from './result-budget.ts'
 
 export interface GraphifyToolOutput {
   text: string
@@ -47,12 +48,66 @@ function renderOutput(_args: unknown, value: unknown): ContentBlock[] {
 }
 
 const PLUGIN_OWNED_TOOLS = new Set([
+  'find_code',
   'graphify_status',
   'graphify_capabilities',
   'graphify_call',
   'graphify_resource',
   'graphify_project_resource',
 ])
+
+interface NavigationCandidate {
+  readonly label: string
+  readonly source: string
+  readonly location?: string
+  readonly order: number
+}
+
+function sourcePenalty(source: string): number {
+  if (/^(?:test|tests|spec|specs|__tests__)\//i.test(source)) return 3
+  if (/^(?:docs?|examples?|fixtures?|benchmarks?)\//i.test(source)) return 2
+  if (/^(?:node_modules|vendor)\//i.test(source)) return 4
+  return 0
+}
+
+/**
+ * Projects verbose Graphify traversal text into source candidates and a small
+ * relationship sample. Candidate order remains stable within each source tier.
+ * @param text Raw `query_graph` text.
+ * @returns Compact model-visible navigation evidence.
+ */
+export function formatNavigationResult(text: string): string {
+  if (!text.trim() || /^Error\b|^No (?:knowledge graph|nodes?\b)/im.test(text)) return text
+
+  const candidates: NavigationCandidate[] = []
+  const seen = new Set<string>()
+  for (const [order, line] of text.split('\n').entries()) {
+    const match = /^NODE (.+?) \[src=(.+?)(?: loc=([^\] ]+))?(?: community=.*)?\]$/.exec(line)
+    if (!match) continue
+    const [, label, source, location] = match
+    const key = `${source}:${location || ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    candidates.push({ label, source, location, order })
+  }
+
+  if (candidates.length === 0) return text
+  candidates.sort((a, b) => sourcePenalty(a.source) - sourcePenalty(b.source) || a.order - b.order)
+
+  const notices = text.split('\n').filter(line => /^\[(?:!|i|Notice:)/.test(line)).slice(0, 2)
+  const relationships = text.split('\n').filter(line => /^EDGE /.test(line)).slice(0, 6)
+  const lines = [
+    ...notices,
+    'Candidate source locations (ranked; verify in source):',
+    ...candidates.slice(0, 10).map((candidate, index) =>
+      `${index + 1}. ${candidate.source}${candidate.location ? `:${candidate.location}` : ''} — ${candidate.label}`
+    ),
+  ]
+  if (relationships.length > 0) {
+    lines.push('Recorded relationships (incomplete):', ...relationships.map(line => `- ${line.slice(5)}`))
+  }
+  return lines.join('\n')
+}
 
 /**
  * Resolves the prefixed tool name consistently without accidental prefix collisions.
@@ -127,6 +182,15 @@ export function createGraphifyToolDefinitions(
   const prefix = config.toolPrefix || ''
   const resolver = customResolver ?? new ProjectResolver(config)
   const coalescer = new ProjectUpdateCoalescer()
+
+  function withResultBudget(rawArgs: Record<string, unknown>): Record<string, unknown> {
+    const requested = rawArgs.token_budget
+    const tokenBudget =
+      typeof requested === 'number' && Number.isInteger(requested) && requested > 0
+        ? Math.min(requested, config.resultTokenBudget)
+        : config.resultTokenBudget
+    return { ...rawArgs, token_budget: tokenBudget }
+  }
 
   async function executeTool(
     rawName: string,
@@ -206,12 +270,30 @@ export function createGraphifyToolDefinitions(
       }
 
       const result = await client.callTool(rawName, args, execution?.signal, config.timeoutMs)
-      const rawText = result.content?.map((c) => c.text || '').join('\n') || ''
+      let rawText = result.content?.map((c) => c.text || '').join('\n') || ''
+      let fallback: unknown
+      let isError = result.isError || false
+      if (rawName === 'get_node' && !isError && typeof args.label === 'string' &&
+          /^No node matching '[^\n]*' found\.$/.test(rawText.trim())) {
+        try {
+          const candidates = await client.callTool('query_graph', {
+            question: args.label,
+            depth: 1,
+            token_budget: config.resultTokenBudget,
+            project_path: args.project_path,
+          }, execution?.signal, config.timeoutMs)
+          fallback = candidates
+          isError = candidates.isError || false
+          rawText = `${rawText}\nSearch candidates (not an exact match; verify in source):\n${candidates.content?.map(c => c.text || '').join('\n') || ''}`
+        } catch (fallbackErr) {
+          fallback = { isError: true, message: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr) }
+        }
+      }
       const text = stalenessNotice ? `${stalenessNotice}${rawText}` : rawText
       return toLosslessJson({
         text,
-        isError: result.isError || false,
-        meta: result,
+        isError,
+        meta: fallback ? { ...result, fallback } : result,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -223,36 +305,60 @@ export function createGraphifyToolDefinitions(
   }
 
   const allDefinitions: ToolDefinition[] = [
-    // 1. query_graph
+    // Compact task-level navigation facade. Full mode also exposes its native parts.
     {
-      name: getPrefixedToolName('query_graph', prefix),
-      description: 'Search the knowledge graph using BFS or DFS. Returns relevant nodes and edges as text context.',
+      name: getPrefixedToolName('find_code', prefix),
+      description: 'Use once when relevant source paths are unknown. Returns ranked locations and nearby recorded relationships; then inspect source.',
       parameters: {
         type: 'object',
         properties: {
-          question: { type: 'string', description: 'Natural language question or keyword search' },
-          mode: { type: 'string', enum: ['bfs', 'dfs'], default: 'bfs', description: 'bfs=broad context, dfs=trace a specific path' },
-          depth: { type: 'integer', default: 3, description: 'Traversal depth (1-6)' },
-          token_budget: { type: 'integer', default: 2000, description: 'Max output tokens' },
-          context_filter: { type: 'array', items: { type: 'string' }, description: 'Optional explicit edge-context filter, e.g. ["call", "field"]' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          question: { type: 'string', description: 'Code behavior, symbol, or change to locate' },
         },
         required: ['question'],
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('query_graph', (args as Record<string, unknown>) || {}, exec, true),
+      execute: async (args, exec) => {
+        const question = (args as { question: string }).question
+        const result = await executeTool('query_graph', {
+          question,
+          depth: 1,
+          token_budget: config.resultTokenBudget,
+        }, exec, true)
+        return { ...result, text: result.isError ? result.text : formatNavigationResult(result.text) }
+      },
+    },
+
+    // 1. query_graph
+    {
+      name: getPrefixedToolName('query_graph', prefix),
+      description: 'Find source paths and symbols for a question. Use when the file is unknown; read the returned source to verify.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'Natural language question or keyword search' },
+          mode: { type: 'string', enum: ['bfs', 'dfs'], default: 'bfs', description: 'bfs=broad context, dfs=trace a specific path' },
+          depth: { type: 'integer', default: 2, description: 'Traversal depth (1-6); start with 1-2' },
+          token_budget: { type: 'integer', default: config.resultTokenBudget, maximum: config.resultTokenBudget, description: 'Result token budget' },
+          context_filter: { type: 'array', items: { type: 'string' }, description: 'Optional explicit edge-context filter, e.g. ["call", "field"]' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
+        },
+        required: ['question'],
+      },
+      output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
+      timeoutMs: config.timeoutMs,
+      execute: (args, exec) => executeTool('query_graph', withResultBudget((args as Record<string, unknown>) || {}), exec, true),
     },
 
     // 2. get_node
     {
       name: getPrefixedToolName('get_node', prefix),
-      description: 'Get full details for a specific node by label or ID.',
+      description: 'Locate a known symbol by label or ID before guessing its file path.',
       parameters: {
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Node label or ID to look up' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
         required: ['label'],
       },
@@ -264,20 +370,20 @@ export function createGraphifyToolDefinitions(
     // 3. get_neighbors
     {
       name: getPrefixedToolName('get_neighbors', prefix),
-      description: 'Get all direct neighbors of a node with edge details.',
+      description: 'Inspect recorded relationships of a node. Preserve edge direction; missing edges do not prove no callers. Verify impact in source.',
       parameters: {
         type: 'object',
         properties: {
           label: { type: 'string', description: 'Node label or ID' },
           relation_filter: { type: 'string', description: 'Optional filter by relation type' },
-          token_budget: { type: 'integer', default: 2000, description: 'Max output tokens' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          token_budget: { type: 'integer', default: config.resultTokenBudget, maximum: config.resultTokenBudget, description: 'Result token budget' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
         required: ['label'],
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('get_neighbors', (args as Record<string, unknown>) || {}, exec, true),
+      execute: (args, exec) => executeTool('get_neighbors', withResultBudget((args as Record<string, unknown>) || {}), exec, true),
     },
 
     // 4. shortest_path
@@ -291,7 +397,7 @@ export function createGraphifyToolDefinitions(
           target: { type: 'string', description: 'Target concept label or keyword' },
           max_hops: { type: 'integer', default: 8, description: 'Maximum hops to consider' },
           undirected: { type: 'boolean', default: false, description: 'Ignore stored edge direction when searching' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
         required: ['source', 'target'],
       },
@@ -304,7 +410,7 @@ export function createGraphifyToolDefinitions(
     {
       name: getPrefixedToolName('graphify_status', prefix),
       description:
-        'Inspect Graphify health, graph existence, freshness, node/edge counts, git synchronization, and MCP connectivity for this workspace.',
+        'Diagnose Graphify after a missing, stale, or failed graph result. Do not call as a routine preflight before a query.',
       parameters: {
         type: 'object',
         properties: {
@@ -387,14 +493,14 @@ export function createGraphifyToolDefinitions(
         type: 'object',
         properties: {
           community_id: { type: 'integer', description: 'Community ID (0-indexed by size)' },
-          token_budget: { type: 'integer', default: 2000, description: 'Max output tokens' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          token_budget: { type: 'integer', default: config.resultTokenBudget, maximum: config.resultTokenBudget, description: 'Result token budget' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
         required: ['community_id'],
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
       timeoutMs: config.timeoutMs,
-      execute: (args, exec) => executeTool('get_community', (args as Record<string, unknown>) || {}, exec, true),
+      execute: (args, exec) => executeTool('get_community', withResultBudget((args as Record<string, unknown>) || {}), exec, true),
     },
 
     // 7. god_nodes
@@ -409,7 +515,7 @@ export function createGraphifyToolDefinitions(
             type: 'number',
             description: 'Suppress nodes whose degree exceeds this percentile (0-100) of the degree distribution, matching cluster() hub exclusion',
           },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
@@ -424,7 +530,7 @@ export function createGraphifyToolDefinitions(
       parameters: {
         type: 'object',
         properties: {
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
@@ -441,7 +547,7 @@ export function createGraphifyToolDefinitions(
         properties: {
           base: { type: 'string', description: 'Base branch to filter PRs by (auto-detected if omitted)' },
           repo: { type: 'string', description: 'GitHub repo (owner/repo). Defaults to current repo.' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
@@ -458,7 +564,7 @@ export function createGraphifyToolDefinitions(
         properties: {
           pr_number: { type: 'integer', description: 'PR number to analyze' },
           repo: { type: 'string', description: 'GitHub repo (owner/repo). Defaults to current repo.' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
         required: ['pr_number'],
       },
@@ -476,7 +582,7 @@ export function createGraphifyToolDefinitions(
         properties: {
           base: { type: 'string', description: 'Base branch to filter PRs by (auto-detected if omitted)' },
           repo: { type: 'string', description: 'GitHub repo (owner/repo). Defaults to current repo.' },
-          project_path: { type: 'string', description: 'Absolute path to project directory. Defaults to workspace.' },
+          project_path: { type: 'string', description: 'Project directory; defaults to session workspace.' },
         },
       },
       output: { schema: COMMON_OUTPUT_SCHEMA, render: renderOutput },
@@ -663,26 +769,22 @@ export function createGraphifyToolDefinitions(
     },
   ]
 
+  // Canonical text is bounded before persistence as well as model rendering.
+  for (const definition of allDefinitions) {
+    const execute = definition.execute
+    definition.execute = async (args, exec) => {
+      const result = (await execute(args, exec)) as GraphifyToolOutput
+      return toLosslessJson({
+        ...result,
+        text: boundResultText(result.text, config.resultMaxChars),
+      })
+    }
+  }
+
   // Filter tools based on toolMode
-  const toolMode: ToolMode = config.toolMode || 'full'
+  const toolMode: ToolMode = config.toolMode || 'compact'
   if (toolMode === 'compact') {
-    const compactToolBaseNames = new Set([
-      'query_graph',
-      'get_node',
-      'get_neighbors',
-      'shortest_path',
-      'graphify_status',
-      'graphify_project_resource',
-    ])
-    return allDefinitions.filter((def) => {
-      // Find matching base name
-      for (const base of compactToolBaseNames) {
-        if (def.name === getPrefixedToolName(base, prefix)) {
-          return true
-        }
-      }
-      return false
-    })
+    return allDefinitions.filter(definition => definition.name === getPrefixedToolName('find_code', prefix))
   }
 
   return allDefinitions

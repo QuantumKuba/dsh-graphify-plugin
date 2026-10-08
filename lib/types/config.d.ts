@@ -50,10 +50,17 @@ export interface Config {
     /**
      * Tool surface mode.
      * - 'full': Registers the complete Graphify tool surface (all 10 native tools, doctor, and escape hatches).
-     * - 'compact': Registers a focused 6-tool surface tailored for smaller local models (20B-30B class).
-     * Defaults to 'full'.
+     * - 'compact': Registers one task-level source navigation tool.
+     * Defaults to 'compact' to reduce the tool schemas included in every model request.
      */
     toolMode: 'compact' | 'full';
+    /**
+     * Default and maximum output budget for Graphify tools that accept
+     * `token_budget`. Callers may request a smaller result but not a larger one.
+     */
+    resultTokenBudget: number;
+    /** Maximum model-visible UTF-16 text length per result, including notices. */
+    resultMaxChars: number;
     /**
      * Freshness monitoring and auto-update configuration.
      */
