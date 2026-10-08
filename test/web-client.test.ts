@@ -38,8 +38,8 @@ function loadWebClientBundle(): {
     if (id === 'react') {
       return { memo: (fn: any) => fn, createElement: () => ({}) }
     }
-    if (id === '@deepseek-ai/dsh-client-ui-primitives') {
-      return { MessageText: () => ({}) }
+    if (id.startsWith('@deepseek-ai/')) {
+      return {}
     }
     throw new Error(`Unexpected require: ${id}`)
   })

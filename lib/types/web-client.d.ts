@@ -11,16 +11,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
         graphify: GraphifyLocaleKey;
     }
 }
-declare module '@deepseek-ai/cordis' {
-    interface Context {
-        /** Target-neutral Conversation registries and per-Session assembly. */
-        uiConversation: {
-            readonly events: {
-                register(definition: unknown): () => void;
-            };
-        };
-    }
-}
 type GraphifyCommandInputViewProps = PropsRuntime<'conversation.chat.node', 'graphify-command-input'> & PropsLocale<'graphify'>;
 /** Right-aligned `/graphify` input bubble without ordinary message actions. */
 export declare const GraphifyCommandInputView: import("react").NamedExoticComponent<GraphifyCommandInputViewProps>;

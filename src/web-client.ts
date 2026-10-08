@@ -1,8 +1,9 @@
 import { createElement, memo, type CSSProperties } from 'react'
-import { MessageText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { graphifyCommandInputDefinition } from './web-command.ts'
 export { graphifyCommandInputDefinition, graphifyCommandText } from './web-command.ts'
@@ -21,17 +22,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Graphify command presentation copy. */
     graphify: GraphifyLocaleKey
-  }
-}
-
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    /** Target-neutral Conversation registries and per-Session assembly. */
-    uiConversation: {
-      readonly events: {
-        register(definition: unknown): () => void
-      }
-    }
   }
 }
 
@@ -84,7 +74,7 @@ export const GraphifyCommandInputView = memo(function GraphifyCommandInputView({
       createElement(
         'div',
         { style: bubbleStyle },
-        createElement(MessageText, { text: node.data.text }),
+        node.data.text,
       ),
     ),
   )
