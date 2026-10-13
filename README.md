@@ -146,7 +146,7 @@ See [`src/config.ts`](src/config.ts) for the complete, typed configuration schem
 
 ## Compatibility and development
 
-The package supports `@deepseek-ai/cordis` `>=4.0.0 <5` and is tested with Graphify `0.9.57`. It ships a prebuilt DSH bundle and can be developed locally with:
+The package supports `@deepseek-ai/cordis` `>=4.0.4 <5`, is tested against DeepSeek Harness `0.2.0-rc.2` (and the `0.2.1-alpha` channel), and is tested with Graphify `0.9.57` (live contract and schema-drift checks also pass on `0.9.90`). It ships a prebuilt DSH bundle and can be developed locally with:
 
 ```sh
 pnpm run typecheck

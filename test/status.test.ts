@@ -209,7 +209,7 @@ describe('graphify_status doctor tool', () => {
 
   it('guarantees graphify_status execute returns valid lossless JSON across unprobed, missing, and healthy states', async () => {
     const { createGraphifyToolDefinitions } = await import('../src/tools.ts')
-    const { snapshotJsonValue } = await import('@deepseek-ai/dsh-session')
+    const { snapshotJsonValue } = await import('@deepseek-ai/dsh-util-values')
 
     const config = Config({
       command: process.execPath,

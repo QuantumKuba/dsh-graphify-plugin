@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-10-14
+
+### Fixed
+- **DeepSeek Harness 0.2.0 compatibility**: verified against `0.2.0-rc.2` (`next`) and `0.2.1-alpha.2` (`alpha`); the previous build did not typecheck against them.
+  - Web client: `ChatNodeDataMap` is now augmented through `@deepseek-ai/dsh-client-ui-chat/client`, the command input bubble renders through `projectUserText` (the `MessageText` primitive was removed), and the local `uiConversation`/`ConversationNodeDefinition` shims were replaced by the harness's own types.
+  - Tests import `snapshotJsonValue` from `@deepseek-ai/dsh-util-values`, its new home.
+- Bumped the `@deepseek-ai/schemastery` dependency to `^3.18.4` and the `@deepseek-ai/cordis` peer range to `>=4.0.4 <5`, matching the harness.
+- Compatibility CI now upgrades the chat, renderer, tools, and util-values packages along with the others.
+
+### Verified
+- Booted a throwaway `headless` profile with this package linked under DSH `0.2.0-rc.2`: Graphify tools and the prompt section appear in the recorded model request.
+- Booted a throwaway `web` profile: the harness serves this package's client bundle in its module graph.
+- Live Graphify contract (`GRAPHIFY_E2E=1`) and schema-drift checks pass on Graphify `0.9.90` (no breaking drift).
+
 ## [0.2.0] - 2026-09-11
 
 ### Added

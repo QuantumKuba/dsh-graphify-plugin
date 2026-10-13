@@ -9,7 +9,7 @@ import { Config } from '../src/config.ts'
 import { GraphifyMcpClient } from '../src/client.ts'
 import { ProjectResolver } from '../src/project-resolver.ts'
 import { createGraphifyToolDefinitions } from '../src/tools.ts'
-import { snapshotJsonValue } from '@deepseek-ai/dsh-session'
+import { snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { Context } from '@deepseek-ai/cordis'
 

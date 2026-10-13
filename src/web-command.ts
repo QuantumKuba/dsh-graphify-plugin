@@ -1,5 +1,7 @@
-import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
+import type {} from '@deepseek-ai/dsh-commands'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
+import type { ConversationNodeDefinition } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
 /** Human-entered `/graphify` command projected into the DSH Web conversation. */
 export interface GraphifyCommandInputData {
@@ -8,23 +10,11 @@ export interface GraphifyCommandInputData {
   readonly time: number
 }
 
-declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
+declare module '@deepseek-ai/dsh-client-ui-chat/client' {
   interface ChatNodeDataMap {
     /** Human-entered `/graphify` command input. */
     'graphify-command-input': GraphifyCommandInputData
   }
-}
-
-/** One independently registered business Event-to-Node state machine in DSH Web Conversation. */
-export interface ConversationNodeDefinition<State = unknown> {
-  readonly kind: string
-  readonly target?: string
-  match(event: SessionEvent<any>): { id: string; role: string } | null
-  start(context: any, match: { event: SessionEvent<any> }, reader?: unknown): State
-  update(context: { state: State }, match?: unknown): State
-  publication?(match: unknown): unknown
-  buildLocationData?(context: unknown, scope: unknown, previous: unknown): unknown
-  buildViewNode?(context: { key: string; id: string; state?: State; start?: { location?: unknown } }): unknown
 }
 
 interface GraphifyCommandInputState extends GraphifyCommandInputData {
@@ -48,14 +38,15 @@ export const graphifyCommandInputDefinition: ConversationNodeDefinition<Graphify
     ? { id: String(event.data.commandId), role: 'start' }
     : null,
   start: (_context, match) => {
-    if (match.event.type !== 'command/run') {
+    const event = match.event
+    if (event.type !== 'command/run') {
       throw new Error('graphify-command-input start requires command/run')
     }
     return {
-      commandId: match.event.data.commandId,
-      seq: match.event.seq,
-      time: match.event.time,
-      text: graphifyCommandText(match.event),
+      commandId: event.data.commandId,
+      seq: event.seq,
+      time: event.time,
+      text: graphifyCommandText(event),
     }
   },
   update: (context) => context.state,

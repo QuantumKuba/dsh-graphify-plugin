@@ -12,7 +12,7 @@ const repoRoot = path.resolve(__dirname, '..')
 
 describe('Packed Package Clean-Machine Installation (Part I & J)', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-clean-pack-'))
-  const tarballPath = path.join(tempDir, 'dsh-graphify-0.2.0.tgz')
+  const tarballPath = path.join(tempDir, `dsh-graphify-${JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version}.tgz`)
 
   it('packs cleanly, installs in isolated environment, and validates all scenarios', async () => {
     // 1. Build and pack the repository
