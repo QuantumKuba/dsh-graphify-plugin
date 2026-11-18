@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] - 2026-11-18
+
+### Fixed
+- **DeepSeek Harness 0.2.2 compatibility**: the previous build did not typecheck against `0.2.2-rc.1` (`latest`), `0.2.2-rc.5` (`next`), or `0.2.2-alpha.3` (`alpha`).
+  - Web client: `projectUserText` was removed from `@deepseek-ai/dsh-client-ui-primitives`; the `/graphify` bubble now renders the command token through `ReferenceChip` (`appearance: 'command'`, display-only) and the arguments through `UserTextRun`, matching the previous output.
+  - Tests: `ToolsService.execute` now dispatches through a composed tool executor. The ToolRuntime tests register a serial executor built from `ToolExecutionPipeline` and `executeToolBatch`, so tool results pass through the harness's own result validation.
+- Compatibility CI: the upgrade step no longer moves the runtime `@deepseek-ai/schemastery` dependency into `devDependencies`, which would have dropped it from the packed package and failed the clean-install test.
+
+### Changed
+- Default pinned Graphify version for `uv` provisioning and install guidance is now `0.9.102` (was `0.9.57`). Auto-update's `PROVEN_CODE_EXTENSIONS` remain a subset of Graphify's `CODE_EXTENSIONS` and AST `_DISPATCH` on `0.9.102` and `0.9.112`.
+- Dev dependencies moved to DeepSeek Harness `0.2.2-rc.1` and `@deepseek-ai/cordis` `^4.1.0`; runtime dependencies to `@deepseek-ai/schemastery` `^3.19.0` and `@modelcontextprotocol/sdk` `^1.32.2`; `tsdown` `^0.23.7` (the client bundle drops the `platform` option, which tsdown 0.23 ignores for CJS output; the emitted bundle is unchanged).
+
+### Verified
+- Typecheck, build, unit tests, and schema-drift checks pass on DSH `0.2.2-rc.1`, `0.2.2-rc.5`, and `0.2.2-alpha.3`.
+- Live Graphify contract (`GRAPHIFY_E2E=1`) and schema-drift checks pass on Graphify `0.9.102` and `0.9.112`.
+
 ## [0.2.1] - 2026-10-14
 
 ### Fixed

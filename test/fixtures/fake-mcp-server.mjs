@@ -22,7 +22,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       result: {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {}, resources: {} },
-        serverInfo: { name: 'graphify-mcp', version: '0.9.57' },
+        serverInfo: { name: 'graphify-mcp', version: '0.9.102' },
       },
     })
     return

@@ -11,16 +11,45 @@ import { ProjectResolver } from '../src/project-resolver.ts'
 import { createGraphifyToolDefinitions } from '../src/tools.ts'
 import { snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { ToolExecutionPipeline, executeToolBatch } from '@deepseek-ai/dsh-tools/pipeline'
 import { Context } from '@deepseek-ai/cordis'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const fixtureDir = path.join(__dirname, 'fixtures', 'sample-project')
 const serverPath = path.join(__dirname, 'fixtures', 'fake-mcp-server.mjs')
 
+interface TestToolCall {
+  callId: string
+  name: string
+  arguments: Record<string, unknown>
+  signal: AbortSignal
+}
+
+/**
+ * Builds a tool registry with a serial executor running DSH's shared tool pipeline, as a DSH profile composes it.
+ * @returns The registry, plus `execute` running one call as a single-call batch.
+ */
 function createTestToolRuntime() {
   const ctx = new Context()
   ;(ctx as any).systemPrompt = { tools: () => {} }
-  return new ToolRuntime(ctx)
+  const runtime = new ToolRuntime(ctx)
+  ;(ctx as any).tools = runtime
+  const pipeline = new ToolExecutionPipeline(ctx)
+  runtime.setExecutor({
+    describe: () => ({ schemas: [], knownNames: [] }),
+    execute: (input) => executeToolBatch(input, pipeline, () => 1),
+  })
+  return {
+    register: (definition: any) => runtime.register(definition),
+    async execute(call: TestToolCall) {
+      const batch = await runtime.execute({
+        calls: [{ type: 'tool-call', id: call.callId as any, name: call.name, arguments: JSON.stringify(call.arguments) }],
+        signal: call.signal,
+      })
+      assert.equal(batch.results.length, 1)
+      return batch.results[0]!.result
+    },
+  }
 }
 
 describe('Lossless JSON serialization & tool output contract', () => {

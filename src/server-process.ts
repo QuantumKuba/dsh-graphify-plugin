@@ -5,7 +5,7 @@ import type { Config } from './config.ts'
 import type { GraphifyCommandRequest } from './commands.ts'
 
 /** Tested default Graphify version pinned for reproducible marketplace deployments. */
-export const DEFAULT_GRAPHIFY_VERSION = '0.9.57'
+export const DEFAULT_GRAPHIFY_VERSION = '0.9.102'
 
 /** Command used to start a local Graphify process. */
 export interface GraphifyCommand {

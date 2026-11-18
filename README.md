@@ -36,7 +36,7 @@ For example, replace `<profile>` with the profile you normally use to run DSH. T
 ### 2. Install the local Graphify runtime
 
 ```sh
-uv tool install 'graphifyy[mcp]==0.9.57'
+uv tool install 'graphifyy[mcp]==0.9.102'
 ```
 
 If Graphify is unavailable, DSH can still start. Ask for `graphify_status` after installing it; the plugin discovers the runtime on the next check or tool call, without a DSH restart.
@@ -146,7 +146,7 @@ See [`src/config.ts`](src/config.ts) for the complete, typed configuration schem
 
 ## Compatibility and development
 
-The package supports `@deepseek-ai/cordis` `>=4.0.4 <5`, is tested against DeepSeek Harness `0.2.0-rc.2` (and the `0.2.1-alpha` channel), and is tested with Graphify `0.9.57` (live contract and schema-drift checks also pass on `0.9.90`). It ships a prebuilt DSH bundle and can be developed locally with:
+The package supports `@deepseek-ai/cordis` `>=4.0.4 <5`, is tested against DeepSeek Harness `0.2.2-rc.1` (and the `0.2.2-rc.5` `next` and `0.2.2-alpha.3` `alpha` channels), and is tested with Graphify `0.9.102` (live contract and schema-drift checks also pass on `0.9.112`). It ships a prebuilt DSH bundle and can be developed locally with:
 
 ```sh
 pnpm run typecheck
