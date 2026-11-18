@@ -55,7 +55,7 @@ describe('Packed Package Clean-Machine Installation (Part I & J)', () => {
     assert.equal(typeof hostModule.apply, 'function')
     assert.equal(typeof hostModule.Config, 'function')
     assert.equal(typeof hostModule.validateConfig, 'function')
-    assert.equal(hostModule.DEFAULT_GRAPHIFY_VERSION, '0.9.57')
+    assert.equal(hostModule.DEFAULT_GRAPHIFY_VERSION, '0.9.102')
 
     // Verify browser client bundle can be read
     const clientBundle = fs.readFileSync(path.join(installedPkgDir, 'lib', 'graphify-client.js'), 'utf8')

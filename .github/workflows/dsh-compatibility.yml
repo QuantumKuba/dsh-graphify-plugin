@@ -29,9 +29,10 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Upgrade to DSH ${{ matrix.dsh_channel }} packages
         run: |
+          # schemastery is a runtime dependency; `pnpm add -D` would move it out of the packed package.
+          pnpm add @deepseek-ai/schemastery@latest
           pnpm add -D \
             @deepseek-ai/cordis@latest \
-            @deepseek-ai/schemastery@latest \
             @deepseek-ai/dsh-client-locale@${{ matrix.dsh_channel }} \
             @deepseek-ai/dsh-client-ui-chat@${{ matrix.dsh_channel }} \
             @deepseek-ai/dsh-client-ui-conversation@${{ matrix.dsh_channel }} \

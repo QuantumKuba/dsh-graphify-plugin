@@ -15,7 +15,6 @@ export default defineConfig({
   entry: { 'graphify-client': 'src/web-client.ts' },
   outDir: 'lib',
   format: 'cjs',
-  platform: 'browser',
   target: 'es2022',
   dts: false,
   sourcemap: true,

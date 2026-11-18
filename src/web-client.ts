@@ -1,5 +1,5 @@
-import { createElement, memo, type CSSProperties } from 'react'
-import { projectUserText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { createElement, memo, type CSSProperties, type ReactNode } from 'react'
+import { ReferenceChip, UserTextRun } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -52,6 +52,27 @@ const bubbleStyle: CSSProperties = {
   padding: '10px 16px',
 }
 
+const COMMAND_TOKEN = '/graphify'
+
+/**
+ * Renders a `/graphify` command line as a display-only command chip followed by its verbatim arguments.
+ * @param text - Command text from {@link graphifyCommandText}.
+ * @returns Inline command chip and argument run, or one plain run when the text does not start with the command token.
+ */
+function graphifyCommandContent(text: string): ReactNode {
+  const rest = text.slice(COMMAND_TOKEN.length)
+  if (!text.startsWith(COMMAND_TOKEN) || (rest !== '' && !/^\s/u.test(rest))) {
+    return createElement(UserTextRun, { text })
+  }
+  const chip = createElement(ReferenceChip, {
+    key: 'command',
+    appearance: 'command',
+    label: COMMAND_TOKEN,
+    title: COMMAND_TOKEN,
+  })
+  return rest === '' ? chip : [chip, createElement(UserTextRun, { key: 'args', text: rest })]
+}
+
 type GraphifyCommandInputViewProps =
   & ChatNodeViewProps<'graphify-command-input'>
   & PropsLocale<'graphify'>
@@ -75,7 +96,7 @@ export const GraphifyCommandInputView = memo(function GraphifyCommandInputView({
       createElement(
         'div',
         { style: bubbleStyle },
-        projectUserText(node.data.text, [], ['graphify'], 'command'),
+        graphifyCommandContent(node.data.text),
       ),
     ),
   )
